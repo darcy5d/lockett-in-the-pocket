@@ -88,33 +88,70 @@ def download_github_repo_zip(user, repo, destination):
     print(f"Repository downloaded and extracted to {final_dir}")
     return True
 
+def extract_data_directories(source_repo_dir, base_data_dir):
+    """
+    Extract only the data directories from the downloaded repository
+    """
+    # Source directories in the downloaded repository
+    source_data_dir = os.path.join(source_repo_dir, "data")
+    source_odds_dir = os.path.join(source_repo_dir, "odds_data")
+    
+    # Destination directories
+    dest_data_dir = os.path.join(base_data_dir, "data")
+    dest_odds_dir = os.path.join(base_data_dir, "odds_data")
+    
+    # Copy data directory
+    if os.path.exists(source_data_dir):
+        # Create destination directories if they don't exist
+        os.makedirs(dest_data_dir, exist_ok=True)
+        
+        # Copy lineups, matches, and players directories
+        for subdir in ["lineups", "matches", "players"]:
+            source_subdir = os.path.join(source_data_dir, subdir)
+            dest_subdir = os.path.join(dest_data_dir, subdir)
+            
+            if os.path.exists(source_subdir):
+                if os.path.exists(dest_subdir):
+                    shutil.rmtree(dest_subdir)
+                print(f"Copying {subdir} directory...")
+                shutil.copytree(source_subdir, dest_subdir)
+    
+    # Copy odds_data directory
+    if os.path.exists(source_odds_dir):
+        if os.path.exists(dest_odds_dir):
+            shutil.rmtree(dest_odds_dir)
+        print(f"Copying odds_data directory...")
+        shutil.copytree(source_odds_dir, dest_odds_dir)
+    
+    print("Data extraction completed!")
+
 def main():
     # GitHub repository details
     user = "akareen"
     repo = "AFL-Data-Analysis"
     
-    # Create a data directory to store the downloaded data
+    # Create data directories
     base_data_dir = "afl_data"
+    temp_dir = "temp_download"
     os.makedirs(base_data_dir, exist_ok=True)
+    os.makedirs(temp_dir, exist_ok=True)
     
-    # Option 1: Download specific directories
-    # This is more efficient if you only need certain parts of the data
-    directories_to_download = ["data", "odds_data"]
+    # Download the entire repository as a zip file
+    # This is necessary especially for the players directory which has too many files
+    # for the GitHub API to handle with the directory download method
+    success = download_github_repo_zip(user, repo, temp_dir)
     
-    for directory in directories_to_download:
-        destination_dir = os.path.join(base_data_dir, directory)
-        success = download_github_directory(user, repo, directory, destination_dir)
-        if success:
-            print(f"Successfully downloaded {directory} to {destination_dir}")
-        else:
-            print(f"Failed to download {directory}")
-    
-    # Option 2: Download the entire repository
-    # This is simpler but downloads more data
-    # Uncomment the following lines to use this option instead
-    # download_github_repo_zip(user, repo, base_data_dir)
-    
-    print("Data fetching completed!")
+    if success:
+        # Extract only the data directories that we need
+        extract_data_directories(os.path.join(temp_dir, repo), base_data_dir)
+        
+        # Clean up temporary directory
+        print("Cleaning up temporary files...")
+        shutil.rmtree(temp_dir)
+        
+        print("Data fetching completed successfully!")
+    else:
+        print("Failed to download the repository.")
 
 if __name__ == "__main__":
     main() 
