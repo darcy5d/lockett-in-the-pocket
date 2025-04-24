@@ -1,0 +1,70 @@
+{
+    "model": {
+        "algorithm": "xgboost",
+        "parameters": {
+            "n_estimators": 200,
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "objective": "binary:logistic",
+            "eval_metric": "logloss",
+            "random_state": 42
+        }
+    },
+    "feature_engineering": {
+        "team_form_matches": 5,
+        "include_player_features": false,
+        "include_odds_features": true,
+        "standardize_features": true
+    },
+    "training": {
+        "test_size": 0.2,
+        "use_time_split": true,
+        "cutoff_year": null
+    },
+    "betting": {
+        "strategies": [
+            {
+                "name": "Flat (1%)",
+                "stake_method": "flat",
+                "flat_stake_percent": 1.0,
+                "threshold": 0.0
+            },
+            {
+                "name": "Flat (5%)",
+                "stake_method": "flat",
+                "flat_stake_percent": 5.0,
+                "threshold": 0.0
+            },
+            {
+                "name": "Kelly (25%)",
+                "stake_method": "kelly",
+                "kelly_fraction": 0.25,
+                "threshold": 0.0
+            },
+            {
+                "name": "Kelly (50%)",
+                "stake_method": "kelly",
+                "kelly_fraction": 0.5,
+                "threshold": 0.0
+            },
+            {
+                "name": "Value (>5%)",
+                "stake_method": "flat",
+                "flat_stake_percent": 1.0,
+                "threshold": 0.05
+            }
+        ],
+        "initial_bankroll": 1000.0,
+        "minimum_edge": 0.02
+    },
+    "paths": {
+        "match_data": "afl_data/data/matches",
+        "player_data": "afl_data/data/players",
+        "lineups_data": "afl_data/data/lineups",
+        "odds_data": "afl_data/odds_data/odds_data_2009_to_present.xlsx",
+        "feature_output": "model/data/match_features.csv",
+        "model_output": "model/output/baseline_model.pkl"
+    }
+} 

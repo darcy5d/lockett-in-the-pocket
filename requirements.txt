@@ -1,4 +1,10 @@
+# Data fetching and processing
 requests>=2.28.0
 pandas>=1.5.0
 numpy>=1.23.0
-openpyxl>=3.1.0 
+openpyxl>=3.1.0
+
+# Data visualization (for data exploration)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+jupyter>=1.0.0 

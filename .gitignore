@@ -161,4 +161,7 @@ cython_debug/
 *.code-workspace
 
 # macOS
-.DS_Store 
+.DS_Store
+
+# AFL data
+afl_data/ 
