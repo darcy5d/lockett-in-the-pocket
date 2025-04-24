@@ -164,4 +164,7 @@ cython_debug/
 .DS_Store
 
 # AFL data
-afl_data/ 
+afl_data/
+
+# Temporary repository
+temp_repo/ 
