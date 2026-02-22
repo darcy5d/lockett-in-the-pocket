@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block title %}AFL Match Predictor — 2026{% endblock %}
+
+{% block content %}
+
+<!-- ── Tab switcher ────────────────────────────────────────────────────── -->
+<ul class="nav nav-tabs mb-4" id="main-tabs">
+  <li class="nav-item">
+    <button class="nav-link" data-tab="training">Data &amp; Training</button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link active" data-tab="fixture">2026 Fixture</button>
+  </li>
+</ul>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- TAB 1: 2026 Fixture                                                   -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-fixture">
+<div class="row g-4">
+
+  <!-- ── Round selector + metadata ──────────────────────────────────────── -->
+  <div class="col-12">
+    <div class="card bg-black border-secondary">
+      <div class="card-body">
+        <div class="d-flex align-items-center gap-3 flex-wrap">
+          <h5 class="card-title text-warning mb-0">2026 AFL Fixture</h5>
+
+          <select id="round-select" class="form-select bg-dark text-light border-secondary" style="max-width:220px">
+            <option value="">Select round…</option>
+          </select>
+
+          <button id="predict-round-btn" class="btn btn-warning fw-bold" disabled>
+            Predict Whole Round
+          </button>
+
+          <div class="ms-auto d-flex align-items-center gap-2">
+            <span id="fixture-freshness" class="text-secondary small"></span>
+            <button id="refresh-fixture-btn" class="btn btn-sm btn-outline-secondary">
+              Refresh Fixture
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Match cards for round ───────────────────────────────────────────── -->
+  <div class="col-12" id="round-matches-container">
+    <div id="round-matches" class="row g-3"></div>
+  </div>
+
+  <!-- ── Round results table ─────────────────────────────────────────────── -->
+  <div class="col-12" id="round-results-section" style="display:none">
+    <div class="card bg-black border-warning">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span class="text-warning fw-bold" id="round-results-title">Round Predictions</span>
+        <span class="text-secondary small">Lineups based on most recent known selections</span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-dark table-hover mb-0" id="round-results-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Venue</th>
+                <th>Home Team</th>
+                <th class="text-center">Home Win %</th>
+                <th class="text-center">Draw %</th>
+                <th class="text-center">Away Win %</th>
+                <th>Away Team</th>
+                <th class="text-center">Predicted Score</th>
+                <th class="text-center">Margin</th>
+              </tr>
+            </thead>
+            <tbody id="round-results-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /.row fixture -->
+</div><!-- #tab-fixture -->
+
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!-- TAB 2: Data & Training                                                 -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-training" style="display:none">
+<div class="row g-4">
+
+  <!-- ── Data status ─────────────────────────────────────────────────────── -->
+  <div class="col-12">
+    <div class="card bg-black border-secondary">
+      <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <h5 class="card-title text-warning mb-0">Data Status</h5>
+          <button id="refresh-data-btn" class="btn btn-sm btn-outline-secondary">Refresh</button>
+        </div>
+        <div class="row g-3" id="data-status-cards">
+          <div class="col-6 col-md-3">
+            <div class="data-stat-card">
+              <div class="data-stat-value" id="stat-match-files">—</div>
+              <div class="data-stat-label">Match CSVs</div>
+              <div class="data-stat-sub" id="stat-match-range"></div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="data-stat-card">
+              <div class="data-stat-value" id="stat-player-files">—</div>
+              <div class="data-stat-label">Player Files</div>
+              <div class="data-stat-sub">Performance records</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="data-stat-card">
+              <div class="data-stat-value" id="stat-lineup-files">—</div>
+              <div class="data-stat-label">Lineup Files</div>
+              <div class="data-stat-sub">Teams with history</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="data-stat-card">
+              <div class="data-stat-value" id="stat-fixture-matches">—</div>
+              <div class="data-stat-label">2026 Matches</div>
+              <div class="data-stat-sub" id="stat-fixture-updated"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 d-flex gap-2">
+          <button id="fetch-historical-btn" class="btn btn-sm btn-outline-secondary">
+            Fetch Historical Data (akareen)
+          </button>
+          <button id="fetch-fixture-btn" class="btn btn-sm btn-outline-secondary">
+            Fetch 2026 Fixture
+          </button>
+          <span id="fetch-status" class="text-secondary small align-self-center ms-2"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Training bug callout ───────────────────────────────────────────── -->
+  <div class="col-12">
+    <div class="bug-callout">
+      <div class="d-flex gap-2 align-items-start">
+        <span class="bug-icon">!</span>
+        <div>
+          <div class="bug-title">Player embeddings were untrained in the current model</div>
+          <div class="bug-body">
+            The current model was trained with all-zero player indices because the lineup CSVs store players as
+            a single <code>players</code> column (semicolon-separated full names), but the training code looked
+            for <code>player1</code>, <code>player2</code>, … columns that do not exist. Every match was
+            presented with identical player data (all zeros), so the model learned a constant output bias —
+            it cannot differentiate between teams by player composition.
+            <strong class="text-warning"> The retrain below fixes this</strong> by using
+            <code>PlayerMapper</code> to parse lineup names into real player indices before training.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Model metrics ─────────────────────────────────────────────────── -->
+  <div class="col-md-6">
+    <div class="card bg-black border-secondary h-100">
+      <div class="card-body">
+        <h5 class="card-title text-warning mb-3">Current Model Metrics</h5>
+        <div id="model-metrics">
+          <div class="text-secondary small">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Retrain ────────────────────────────────────────────────────────── -->
+  <div class="col-md-6">
+    <div class="card bg-black border-secondary h-100">
+      <div class="card-body">
+        <h5 class="card-title text-warning mb-3">Retrain Model</h5>
+
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <label class="form-label text-secondary small">Train from year</label>
+            <input id="train-year-from" type="number" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   value="1990" min="1897" max="2025" />
+          </div>
+          <div class="col-4">
+            <label class="form-label text-secondary small">Train to year</label>
+            <input id="train-year-to" type="number" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   value="2025" min="1897" max="2025" />
+          </div>
+          <div class="col-4">
+            <label class="form-label text-secondary small">Max epochs</label>
+            <input id="train-epochs" type="number" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   value="20" min="1" max="200" />
+          </div>
+        </div>
+
+        <button id="train-btn" class="btn btn-warning fw-bold w-100 mb-3">
+          Retrain Model
+        </button>
+
+        <div id="train-status-bar" style="display:none" class="mb-2">
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-secondary small" id="train-status-label">Initialising…</span>
+            <span class="text-secondary small" id="train-elapsed"></span>
+          </div>
+          <div class="progress" style="height:4px">
+            <div id="train-progress" class="progress-bar bg-warning progress-bar-striped progress-bar-animated" style="width:100%"></div>
+          </div>
+        </div>
+
+        <div id="train-log-box" class="train-log" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /.row training -->
+</div><!-- #tab-training -->
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/app.js') }}?v={{ range(100000) | random }}"></script>
+{% endblock %}

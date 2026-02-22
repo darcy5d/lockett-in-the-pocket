@@ -149,13 +149,19 @@ def main():
         # Extract only the data directories that we need
         extract_data_directories(os.path.join(temp_dir, repo), base_data_dir)
         
-        # Clean up temporary directory
+        # Clean up temporary directory — non-fatal if it fails (e.g. permissions on macOS)
         print("Cleaning up temporary files...")
-        shutil.rmtree(temp_dir)
+        try:
+            shutil.rmtree(temp_dir)
+            print("Cleanup complete.")
+        except Exception as e:
+            print(f"Warning: could not remove temp dir {temp_dir}: {e}")
+            print("Data was extracted successfully — cleanup can be done manually.")
         
         print("Data fetching completed successfully!")
     else:
         print("Failed to download the repository.")
+        raise SystemExit(1)
 
 if __name__ == "__main__":
     main() 

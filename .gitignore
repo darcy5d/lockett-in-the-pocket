@@ -128,6 +128,17 @@ ENV/
 env.bak/
 venv.bak/
 afl_venv/
+afl_venv_3_9/
+
+# Model output (binary artefacts — large files, retrained locally)
+model/output/*.h5
+model/output/*.keras
+model/output/*.joblib
+model/output_compatible/
+
+# Old GUI binary models
+gui_old/resources/*.h5
+gui_old/resources/*.keras
 
 # Spyder project settings
 .spyderproject

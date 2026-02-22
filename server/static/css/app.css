@@ -1,0 +1,378 @@
+/* AFL Match Predictor ─ 2026 ─ Dark, expressive UI */
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+body {
+  min-height: 100vh;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: #0a0a0f;
+}
+
+/* ── Navbar ─────────────────────────────────────────────────────────────── */
+.navbar {
+  background: linear-gradient(90deg, #000 60%, #1a0e00) !important;
+  border-bottom: 1px solid #2a2010 !important;
+  box-shadow: 0 2px 20px rgba(255, 193, 7, 0.08);
+}
+
+.navbar-brand {
+  letter-spacing: 3px;
+  font-size: 1.1rem;
+  text-shadow: 0 0 20px rgba(255, 193, 7, 0.4);
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────────────── */
+.nav-tabs {
+  border-bottom: 1px solid #2a2a2a;
+  gap: 4px;
+}
+
+.nav-tabs .nav-link {
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 0.6rem 1.5rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  transition: all 0.2s;
+  color: #6c757d !important;
+}
+
+.nav-tabs .nav-link:hover {
+  color: #adb5bd !important;
+}
+
+.nav-tabs .nav-link.active {
+  border-bottom-color: #ffc107;
+  color: #ffc107 !important;
+  background: none;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+.card {
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Match cards (fixture tab) ──────────────────────────────────────────── */
+.match-card {
+  background: #0f0f1a;
+  border: 1px solid #1e1e2e;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.match-card:hover {
+  border-color: #333;
+  box-shadow: 0 4px 20px rgba(255, 193, 7, 0.06);
+}
+
+.match-card .team-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.match-card .vs-badge {
+  font-size: 0.65rem;
+  color: #555;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border: 1px solid #333;
+  border-radius: 999px;
+}
+
+.match-card .meta {
+  font-size: 0.72rem;
+  color: #666;
+}
+
+.match-card .tbc-pill {
+  font-size: 0.6rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #1e1e00;
+  color: #aaa;
+  border: 1px solid #3a3a00;
+}
+
+/* ── Player chips ───────────────────────────────────────────────────────── */
+.player-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s;
+}
+
+.player-chip:hover { opacity: 0.75; }
+
+.player-chip.in-lineup {
+  background: #ffc107;
+  color: #000;
+  font-weight: 600;
+}
+
+.player-chip.in-season {
+  background: #1a1a2e;
+  color: #8888aa;
+  border: 1px solid #2a2a4e;
+}
+
+.player-chip.addable {
+  background: #0a1a0a;
+  color: #4caf50;
+  border: 1px solid #1a3a1a;
+}
+
+/* ── Predict button ─────────────────────────────────────────────────────── */
+#predict-btn {
+  letter-spacing: 2px;
+  font-size: 0.85rem;
+  padding: 0.75rem 2.5rem;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(255, 193, 7, 0.3);
+  transition: all 0.2s;
+}
+
+#predict-btn:hover:not(:disabled) {
+  box-shadow: 0 6px 28px rgba(255, 193, 7, 0.5);
+  transform: translateY(-1px);
+}
+
+#predict-round-btn {
+  letter-spacing: 1px;
+  font-size: 0.82rem;
+}
+
+/* ── Single match results ────────────────────────────────────────────────── */
+#results-section {
+  animation: fadeUp 0.35s ease;
+}
+
+.prob-bar {
+  height: 6px;
+  border-radius: 3px;
+  margin-top: 6px;
+}
+
+/* ── Round results table ─────────────────────────────────────────────────── */
+#round-results-section {
+  animation: fadeUp 0.35s ease;
+}
+
+#round-results-table {
+  font-size: 0.82rem;
+}
+
+#round-results-table thead th {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #555;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid #1e1e1e;
+  white-space: nowrap;
+}
+
+#round-results-table tbody td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #111;
+  vertical-align: middle;
+}
+
+#round-results-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+#round-results-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.prob-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.prob-pill.winner {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffc107;
+}
+
+.prob-pill.loser {
+  background: transparent;
+  color: #555;
+}
+
+.score-display {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.margin-display {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #ffc107;
+}
+
+/* ── Section labels ─────────────────────────────────────────────────────── */
+.section-label {
+  font-size: 0.65rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #555;
+  margin-bottom: 6px;
+  margin-top: 14px;
+}
+
+/* ── Freshness badge ────────────────────────────────────────────────────── */
+#fixture-freshness {
+  font-size: 0.72rem;
+}
+
+/* ── Animation ──────────────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Data status cards ──────────────────────────────────────────────────── */
+.data-stat-card {
+  background: #0f0f1a;
+  border: 1px solid #1e1e2e;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.data-stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #ffc107;
+  line-height: 1.1;
+}
+
+.data-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #888;
+  margin-top: 4px;
+}
+
+.data-stat-sub {
+  font-size: 0.68rem;
+  color: #555;
+  margin-top: 2px;
+}
+
+/* ── Bug callout ─────────────────────────────────────────────────────────── */
+.bug-callout {
+  background: #1a0a00;
+  border: 1px solid #5a2a00;
+  border-left: 4px solid #ff6600;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+
+.bug-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  background: #ff6600;
+  color: #000;
+  font-weight: 900;
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.bug-title {
+  font-weight: 700;
+  color: #ff9944;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+.bug-body {
+  font-size: 0.82rem;
+  color: #aaa;
+  line-height: 1.55;
+}
+
+.bug-body code {
+  background: #2a1500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+  color: #ffaa55;
+}
+
+/* ── Metrics grid ────────────────────────────────────────────────────────── */
+.metrics-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: #0f0f1a;
+  border-radius: 6px;
+  border: 1px solid #1e1e2e;
+}
+
+.metric-label {
+  font-size: 0.78rem;
+  color: #888;
+}
+
+.metric-value {
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Training log box ────────────────────────────────────────────────────── */
+.train-log {
+  background: #050508;
+  border: 1px solid #1a1a2e;
+  border-radius: 6px;
+  padding: 10px;
+  height: 260px;
+  overflow-y: auto;
+  font-family: "SF Mono", "Consolas", "Fira Code", monospace;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: #aaa;
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-line.log-error { color: #ff6666; }
+.log-line.log-info  { color: #6699ff; }
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #111; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
