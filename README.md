@@ -61,11 +61,39 @@ The file contains all 207 matches with team and venue names normalised to match 
 
 ### Update historical data
 
+All historical data is scraped directly from [AFL Tables](https://afltables.com/afl/afl_index.html) — the canonical source for AFL match and player data.
+
+**Gap update** (scrape new rounds and append to existing data):
+
 ```bash
-python datafetch/fetch_afl_data.py
+python datafetch/update_from_afl_tables.py --lineups --player-stats
 ```
 
-Downloads the latest data from [akareen/AFL-Data-Analysis](https://github.com/akareen/AFL-Data-Analysis) — historical matches, lineups, player performance stats.
+**Full rebuild** (re-scrape all seasons, round-by-round with resume):
+
+```bash
+python datafetch/rebuild_from_afl_tables.py --year-from 1990 --year-to 2025 --lineups --player-stats
+```
+
+**One round at a time** (small bites, merges with existing output):
+
+```bash
+python datafetch/afl_tables_scraper.py --year-from 2025 --year-to 2025 --round 1 --lineups --player-stats
+```
+
+All data is written to `afl_data/data/` with three data types:
+- `matches/matches_YYYY.csv` — match scores and quarter breakdowns
+- `lineups/team_lineups_<team>.csv` — per-round team lineups
+- `players/<player_id>_performance_details.csv` — per-player per-game stats (kicks, marks, etc.)
+
+**Populate SQLite** (optional — for SQLite-backed app mode):
+
+```bash
+python datafetch/populate_sqlite_from_csv.py --source afl_data --output afl_data/data/afl.db --players
+USE_AFL_SQLITE=1 python server/app.py
+```
+
+See `datafetch/AFL_TABLES_REFERENCE.md` for URL layout and schema mapping.
 
 ---
 
@@ -102,16 +130,23 @@ AFL/
 │       ├── scaler.joblib
 │       ├── player_index.json
 │       └── feature_cols.json
-├── afl_data/                   AFL data
+├── afl_data/                   AFL data (scraped from AFL Tables)
 │   └── data/
 │       ├── matches/            matches_YYYY.csv (1897–2026)
 │       ├── lineups/            team_lineups_<team>.csv
-│       └── players/            *_performance_details.csv
+│       └── players/            <player_id>_performance_details.csv
+├── core/
+│   ├── afl_data_store.py       Data access layer (CSV or SQLite)
+│   └── ...
 ├── datafetch/                  Data pipeline scripts
-│   ├── fetch_afl_data.py       Pull historical data from GitHub
+│   ├── afl_tables_scraper.py   Scrape AFL Tables → matches, lineups, player stats
+│   ├── rebuild_from_afl_tables.py   Full scrape (round-by-round with resume)
+│   ├── update_from_afl_tables.py    Gap update (new rounds/seasons)
 │   ├── fetch_2026_fixture.py   Scrape 2026 fixture
+│   ├── populate_sqlite_from_csv.py  CSV → afl.db
 │   └── load_afl_data.py        AFLDataLoader class
 └── scripts/
+    ├── compare_data_sources.py Data validation
     └── validate_mappings.py    Mapping validation (run after changes)
 ```
 
@@ -249,8 +284,10 @@ When Sydney vs Carlton produces a different prediction from Gold Coast vs Geelon
 
 | Source | Used for |
 |--------|----------|
-| [akareen/AFL-Data-Analysis](https://github.com/akareen/AFL-Data-Analysis) | Historical matches (1897–2025), lineups, player stats |
+| [AFL Tables](https://afltables.com/afl/afl_index.html) | Historical matches (1990–2025), lineups, player stats — scraped directly via `datafetch/afl_tables_scraper.py` |
 | [fixturedownload.com](https://fixturedownload.com/results/afl-2026) | 2026 AFL fixture |
+
+AFL Tables is the canonical source for AFL match and player data (complete to end of season 2025). Our scraper writes data in CSV format with the same schema: team names (Sydney, Greater Western Sydney, etc.), venue names (S.C.G., M.C.G., Docklands), and match scores in goals.behinds form. See `datafetch/AFL_TABLES_REFERENCE.md` for URL layout and schema mapping.
 
 ---
 

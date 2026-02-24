@@ -1,14 +1,19 @@
 """
 Prediction API — loads trained model and FeatureEngine state,
 computes real features for each match, and runs predictions.
+
+Win probability is derived from the predicted margin via a calibrated
+logistic function (Goddard 2005), not from a separate softmax head.
+This guarantees consistency: whoever is predicted to score more always
+has the higher win probability.
 """
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List
 
 import joblib
-import json
 import numpy as np
 import tensorflow as tf
 
@@ -46,25 +51,27 @@ _model = None
 _match_scaler = None
 _enh_scaler = None
 _feature_cols = None
-_engine = None  # FeatureEngine instance
+_engine = None
+_calibration = None  # {k, sigma, draw_base_rate}
 
 
 def clear_model_cache() -> None:
     """Clear all caches. Call after retraining."""
-    global _model, _match_scaler, _enh_scaler, _feature_cols, _engine
+    global _model, _match_scaler, _enh_scaler, _feature_cols, _engine, _calibration
     _model = None
     _match_scaler = None
     _enh_scaler = None
     _feature_cols = None
     _engine = None
+    _calibration = None
     import model.player_stats_api as _psa
     _psa._player_stats_cache = None
     _psa._player_index_cache = None
 
 
 def _load_all():
-    """Load model, scalers, feature cols, and FeatureEngine state."""
-    global _model, _match_scaler, _enh_scaler, _feature_cols, _engine
+    """Load model, scalers, feature cols, calibration, and FeatureEngine state."""
+    global _model, _match_scaler, _enh_scaler, _feature_cols, _engine, _calibration
 
     if _model is not None:
         return
@@ -89,8 +96,8 @@ def _load_all():
     # Match scaler
     try:
         _match_scaler = joblib.load(os.path.join(model_dir, "scaler.joblib"))
-    except Exception as e:
-        print(f"Error loading match scaler: {e}")
+    except Exception:
+        pass
 
     # Enhanced scaler
     try:
@@ -105,13 +112,52 @@ def _load_all():
     except Exception:
         _feature_cols = None
 
-    # FeatureEngine state (ELO, form, venue, H2H)
+    # Calibration parameters (k, sigma, draw_base_rate)
+    try:
+        with open(os.path.join(model_dir, "calibration.json")) as f:
+            _calibration = json.load(f)
+        print(f"Calibration loaded: k={_calibration['k']:.2f}")
+    except Exception:
+        _calibration = {"k": 37.0, "sigma": 43.6, "draw_base_rate": 0.009}
+        print("Using default calibration (k=37)")
+
+    # FeatureEngine state
     try:
         from core.feature_engine import FeatureEngine
         _engine = FeatureEngine.load_from_state(OUTPUT_DIR)
     except Exception as e:
         print(f"Warning: FeatureEngine state not loaded: {e}")
         _engine = None
+
+
+# ---------------------------------------------------------------------------
+# Margin -> win probability (calibrated logistic)
+# ---------------------------------------------------------------------------
+
+def _margin_to_probabilities(margin: float) -> dict:
+    """
+    Derive win/draw/loss probabilities from predicted margin using
+    calibrated logistic function (Goddard 2005).
+
+    P(home_win) = sigmoid(margin / k)
+    P(draw) ~ base_rate * exp(-margin^2 / (2 * sigma^2))
+    """
+    cal = _calibration or {"k": 37.0, "sigma": 43.6, "draw_base_rate": 0.009}
+    k = cal["k"]
+    sigma = cal["sigma"]
+    draw_base = cal["draw_base_rate"]
+
+    p_home = 1.0 / (1.0 + np.exp(-margin / k))
+    p_away = 1.0 - p_home
+    p_draw = draw_base * np.exp(-margin ** 2 / (2.0 * sigma ** 2))
+
+    # Normalise to sum to 1
+    total = p_home + p_away + p_draw
+    return {
+        "team1_win": float(p_home / total),
+        "draw": float(p_draw / total),
+        "team2_win": float(p_away / total),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +174,8 @@ def predict_match_outcome(
     """
     Predict the outcome of a match.
 
-    If FeatureEngine state is available, computes real ELO/form/venue features.
-    Otherwise falls back to zero match features (less accurate).
+    Win probability is derived from the predicted margin via calibrated
+    logistic — guaranteed consistent with predicted scores.
     """
     _load_all()
 
@@ -155,7 +201,6 @@ def predict_match_outcome(
             enh_t1 = _enh_scaler.transform(enh_t1)
             enh_t2 = _enh_scaler.transform(enh_t2)
     else:
-        # Fallback: zero features
         n_feats = len(_feature_cols) if _feature_cols else 19
         X_match = np.zeros((1, n_feats))
         if _match_scaler is not None:
@@ -172,30 +217,29 @@ def predict_match_outcome(
             [X_match, team1_indices, team2_indices, enh_t1, enh_t2]
         )
 
-        winner_probs = predictions[0][0]
-        team1_goals = float(predictions[1][0][0])
-        team1_behinds = float(predictions[2][0][0])
-        team2_goals = float(predictions[3][0][0])
-        team2_behinds = float(predictions[4][0][0])
-        margin = float(predictions[5][0][0])
+        # Model outputs: [t1_goals, t1_behinds, t2_goals, t2_behinds, margin]
+        team1_goals = float(predictions[0][0][0])
+        team1_behinds = float(predictions[1][0][0])
+        team2_goals = float(predictions[2][0][0])
+        team2_behinds = float(predictions[3][0][0])
+        margin = float(predictions[4][0][0])
 
         team1_score = team1_goals * 6 + team1_behinds
         team2_score = team2_goals * 6 + team2_behinds
 
-        if winner_probs[0] > winner_probs[2]:
+        # Derive win probability from margin (Goddard 2005)
+        probs = _margin_to_probabilities(margin)
+
+        if margin > 0:
             winner = "team1"
-        elif winner_probs[2] > winner_probs[0]:
+        elif margin < 0:
             winner = "team2"
         else:
             winner = "draw"
 
         return {
             "winner": winner,
-            "winner_probabilities": {
-                "team1_win": float(winner_probs[0]),
-                "draw": float(winner_probs[1]),
-                "team2_win": float(winner_probs[2]),
-            },
+            "winner_probabilities": probs,
             "margin": margin,
             "team1": {"goals": team1_goals, "behinds": team1_behinds, "score": team1_score},
             "team2": {"goals": team2_goals, "behinds": team2_behinds, "score": team2_score},

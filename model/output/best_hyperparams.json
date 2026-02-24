@@ -1,0 +1,10 @@
+{
+  "embedding_dim": 32,
+  "dense_1": 256,
+  "dense_2": 128,
+  "dense_3": 32,
+  "dropout": 0.2,
+  "learning_rate": 0.00011222684782182802,
+  "batch_size": 16,
+  "l2": 0.005641213928674724
+}

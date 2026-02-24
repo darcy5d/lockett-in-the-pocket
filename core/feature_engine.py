@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -79,10 +80,16 @@ class FeatureEngine:
         match_dir: Optional[Path] = None,
         lineup_dir: Optional[Path] = None,
         player_dir: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
     ):
         self._match_dir = match_dir or (_PROJECT_ROOT / "afl_data/data/matches")
         self._lineup_dir = lineup_dir or (_PROJECT_ROOT / "afl_data/data/lineups")
         self._player_dir = player_dir or (_PROJECT_ROOT / "afl_data/data/players")
+        self._data_dir = Path(data_dir) if data_dir else (_PROJECT_ROOT / "afl_data/data")
+        self._store = None
+        if os.environ.get("USE_AFL_SQLITE") == "1" and (self._data_dir / "afl.db").exists():
+            from core.afl_data_store import AFLDataStore
+            self._store = AFLDataStore.from_path(self._data_dir)
         self._mapper = PlayerMapper()
 
         self.match_data: Optional[pd.DataFrame] = None
@@ -109,7 +116,13 @@ class FeatureEngine:
     # ------------------------------------------------------------------
 
     def load_matches(self, year_from: int = 1897, year_to: int = 2025) -> None:
-        """Load and concatenate match CSVs for the given year range."""
+        """Load and concatenate match data (from SQLite if afl.db exists, else CSVs)."""
+        if self._store is not None:
+            self.match_data = self._store.load_matches(year_from, year_to)
+            if self.match_data.empty:
+                raise RuntimeError(f"No match data in store for {year_from}–{year_to}")
+            print(f"  Loaded {len(self.match_data)} matches ({year_from}–{year_to})")
+            return
         dfs = []
         for y in range(year_from, year_to + 1):
             p = self._match_dir / f"matches_{y}.csv"
@@ -141,7 +154,21 @@ class FeatureEngine:
         print(f"  Loaded {len(self.match_data)} matches ({year_from}–{year_to})")
 
     def load_lineups(self) -> None:
-        """Load all lineup CSVs."""
+        """Load lineup data (from SQLite if afl.db exists, else CSVs)."""
+        if self._store is not None:
+            self.lineup_data = self._store.load_lineups()
+            if self.lineup_data.empty:
+                # Fall back to CSV if DB has no lineups
+                files = sorted(self._lineup_dir.glob("team_lineups_*.csv"))
+                if files:
+                    dfs = [pd.read_csv(f) for f in files]
+                    self.lineup_data = pd.concat(dfs, ignore_index=True)
+                else:
+                    self.lineup_data = pd.DataFrame(columns=["year", "date", "round_num", "team_name", "players"])
+            if not self.lineup_data.empty:
+                self.lineup_data["round_num"] = self.lineup_data["round_num"].astype(str)
+            print(f"  Loaded {len(self.lineup_data)} lineup rows")
+            return
         files = sorted(self._lineup_dir.glob("team_lineups_*.csv"))
         dfs = [pd.read_csv(f) for f in files]
         self.lineup_data = pd.concat(dfs, ignore_index=True)
@@ -149,7 +176,11 @@ class FeatureEngine:
         print(f"  Loaded {len(self.lineup_data)} lineup rows")
 
     def load_player_stats(self) -> None:
-        """Load per-player game logs from performance CSVs."""
+        """Load per-player game logs (from SQLite if afl.db exists, else performance CSVs)."""
+        if self._store is not None:
+            self._player_game_log = self._store.load_player_stats()
+            print(f"  Game logs for {len(self._player_game_log)} players")
+            return
         files = glob.glob(str(self._player_dir / "*_performance_details.csv"))
         print(f"  Loading player game logs from {len(files)} files…")
         for f in files:

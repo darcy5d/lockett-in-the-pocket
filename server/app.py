@@ -22,6 +22,8 @@ GET  /api/data/model-metrics        parsed evaluation_metrics.txt
 POST /api/data/fetch-historical     download latest data from akareen GitHub
 POST /api/train                     start model retraining subprocess
 GET  /api/train/status?job_id=      poll training job (running, log lines, exit_code)
+POST /api/tune                      start Hyperband hyperparameter tuning (runs tune_hyperband.py --save-final)
+GET  /api/tune/status?job_id=       poll tune job (running, log lines, exit_code)
 """
 
 import subprocess
@@ -43,6 +45,10 @@ from model.prediction_api import predict_match_outcome, clear_model_cache
 # In-memory store for training jobs  {job_id: {running, lines, exit_code}}
 _training_jobs: dict = {}
 _training_lock = threading.Lock()
+
+# In-memory store for tune jobs (same shape)
+_tune_jobs: dict = {}
+_tune_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -325,6 +331,19 @@ def api_fetch_historical():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _any_job_running() -> bool:
+    """True if a train or tune job is currently running."""
+    with _training_lock:
+        for job in _training_jobs.values():
+            if job.get("running"):
+                return True
+    with _tune_lock:
+        for job in _tune_jobs.values():
+            if job.get("running"):
+                return True
+    return False
+
+
 def _run_training(job_id: str, year_from: int, year_to: int, epochs: int) -> None:
     """Run model/train.py in a subprocess, streaming output to job store."""
     script = str(_PROJECT_ROOT / "model/train.py")
@@ -369,11 +388,9 @@ def api_train():
     year_to = int(data.get("year_to", 2025))
     epochs = int(data.get("epochs", 20))
 
-    # Only one job at a time
-    with _training_lock:
-        for jid, job in _training_jobs.items():
-            if job["running"]:
-                return jsonify({"error": "A training job is already running", "job_id": jid}), 409
+    # Only one job at a time (train or tune)
+    if _any_job_running():
+        return jsonify({"error": "A training or tuning job is already running"}), 409
 
     job_id = str(uuid.uuid4())[:8]
     with _training_lock:
@@ -394,6 +411,101 @@ def api_train_status():
         return jsonify({"error": "Unknown job_id"}), 404
 
     with _training_lock:
+        seen = job["seen"]
+        all_lines = job["lines"]
+        new_lines = all_lines[seen:]
+        job["seen"] = len(all_lines)
+        running = job["running"]
+        exit_code = job["exit_code"]
+
+    return jsonify({
+        "running": running,
+        "new_lines": new_lines,
+        "exit_code": exit_code,
+    })
+
+
+def _run_tuning(
+    job_id: str,
+    year_from: int,
+    year_to: int,
+    max_epochs: int,
+    patience: int = 15,
+    hyperband_iterations: int = 2,
+) -> None:
+    """Run model/tune_hyperband.py with --save-final in a subprocess."""
+    script = str(_PROJECT_ROOT / "model/tune_hyperband.py")
+    cmd = [
+        sys.executable, script,
+        "--year-from", str(year_from),
+        "--year-to", str(year_to),
+        "--max-epochs", str(max_epochs),
+        "--patience", str(patience),
+        "--hyperband-iterations", str(hyperband_iterations),
+        "--save-final",
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(_PROJECT_ROOT),
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            with _tune_lock:
+                _tune_jobs[job_id]["lines"].append(line)
+        proc.wait()
+        with _tune_lock:
+            _tune_jobs[job_id]["running"] = False
+            _tune_jobs[job_id]["exit_code"] = proc.returncode
+        if proc.returncode == 0:
+            clear_model_cache()
+    except Exception as e:
+        with _tune_lock:
+            _tune_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _tune_jobs[job_id]["running"] = False
+            _tune_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/tune", methods=["POST"])
+def api_tune():
+    """Start a Hyperband tuning job (runs tune_hyperband.py --save-final)."""
+    data = request.get_json(silent=True) or {}
+    year_from = int(data.get("year_from", 1990))
+    year_to = int(data.get("year_to", 2025))
+    max_epochs = int(data.get("max_epochs", 100))
+    patience = int(data.get("patience", 15))
+    hyperband_iterations = int(data.get("hyperband_iterations", 2))
+
+    if _any_job_running():
+        return jsonify({"error": "A training or tuning job is already running"}), 409
+
+    job_id = str(uuid.uuid4())[:8]
+    with _tune_lock:
+        _tune_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+
+    t = threading.Thread(
+        target=_run_tuning,
+        args=(job_id, year_from, year_to, max_epochs, patience, hyperband_iterations),
+        daemon=True,
+    )
+    t.start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/tune/status")
+def api_tune_status():
+    """Poll tune job. Returns running, new_lines, exit_code."""
+    job_id = request.args.get("job_id", "")
+    with _tune_lock:
+        job = _tune_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+
+    with _tune_lock:
         seen = job["seen"]
         all_lines = job["lines"]
         new_lines = all_lines[seen:]

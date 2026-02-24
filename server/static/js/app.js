@@ -15,6 +15,19 @@
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------------------
+// Score rounding: cascade fractional goals into behinds
+// ---------------------------------------------------------------------------
+
+function cascadeScore(rawGoals, rawBehinds) {
+  const wholeGoals = Math.floor(rawGoals);
+  const fracGoals = rawGoals - wholeGoals;
+  const extraBehinds = fracGoals * 6;
+  const totalBehinds = Math.round(rawBehinds + extraBehinds);
+  const score = wholeGoals * 6 + totalBehinds;
+  return [wholeGoals, totalBehinds, score];
+}
+
+// ---------------------------------------------------------------------------
 // Tab switching
 // ---------------------------------------------------------------------------
 
@@ -199,10 +212,12 @@ function renderRoundResults(results, roundLabel) {
     } else {
       const probs = pred.winner_probabilities;
       const t1 = pred.team1, t2 = pred.team2;
-      const s1 = Math.round(t1.goals * 6 + t1.behinds);
-      const s2 = Math.round(t2.goals * 6 + t2.behinds);
-      const margin = Math.abs(pred.margin).toFixed(0);
-      const homeWins = probs.team1_win >= probs.team2_win;
+      // Cascade rounding: floor goals, convert fractional goals to behinds, then round behinds once
+      const [g1, b1, s1] = cascadeScore(t1.goals, t1.behinds);
+      const [g2, b2, s2] = cascadeScore(t2.goals, t2.behinds);
+      const displayMargin = Math.abs(s1 - s2);
+      const homeWins = pred.margin > 0;
+      const isDraw = s1 === s2;
       const leader = homeWins ? r.home_team : r.away_team;
 
       tr.innerHTML = `
@@ -218,11 +233,11 @@ function renderRoundResults(results, roundLabel) {
         </td>
         <td class="${!homeWins ? "text-warning fw-bold" : "text-secondary"}">${r.away_team}</td>
         <td class="text-center">
-          <span class="score-display ${homeWins ? "text-warning" : "text-light"}">${t1.goals.toFixed(0)}.${t1.behinds.toFixed(0)} (${s1})</span>
+          <span class="score-display ${homeWins ? "text-warning" : "text-light"}">${g1}.${b1} (${s1})</span>
           <span class="meta mx-1">–</span>
-          <span class="score-display ${!homeWins ? "text-warning" : "text-light"}">${t2.goals.toFixed(0)}.${t2.behinds.toFixed(0)} (${s2})</span>
+          <span class="score-display ${!homeWins ? "text-warning" : "text-light"}">${g2}.${b2} (${s2})</span>
         </td>
-        <td class="text-center"><span class="margin-display">${leader} by ${margin}</span></td>`;
+        <td class="text-center"><span class="margin-display">${isDraw ? "Draw" : `${leader} by ${displayMargin}`}</span></td>`;
     }
     tbody.appendChild(tr);
   });
@@ -263,7 +278,9 @@ async function refreshFixture() {
 
 let _trainingTabInitialised = false;
 let _trainingJobId = null;
+let _tuneJobId = null;
 let _trainingPollTimer = null;
+let _tunePollTimer = null;
 let _trainingStart = null;
 
 async function initTrainingTab() {
@@ -301,19 +318,17 @@ async function loadModelMetrics() {
     }
 
     const rmseMargin = parseFloat(m.rmse_margin ?? 0);
-    const marginBad = rmseMargin > 20;
-    const acc = parseFloat(m.match_winner_accuracy ?? 0);
+    const acc = parseFloat(m.winner_accuracy_from_margin ?? m.match_winner_accuracy ?? 0);
 
     el.innerHTML = `
       <div class="metrics-grid">
-        ${metricRow("Winner accuracy", `${(acc*100).toFixed(1)}%`, acc < 0.6 ? "bad" : acc < 0.8 ? "ok" : "good")}
-        ${metricRow("F1 score", parseFloat(m.f1_score ?? 0).toFixed(3), parseFloat(m.f1_score??0) < 0.5 ? "bad" : "ok")}
-        ${metricRow("RMSE margin", rmseMargin.toFixed(1) + " pts", marginBad ? "bad" : "ok")}
+        ${metricRow("Winner accuracy", `${(acc*100).toFixed(1)}%`, acc < 0.55 ? "bad" : acc < 0.65 ? "ok" : "good")}
+        ${metricRow("RMSE margin", rmseMargin.toFixed(1) + " pts", rmseMargin > 50 ? "bad" : rmseMargin > 40 ? "ok" : "good")}
         ${metricRow("RMSE team1 goals", parseFloat(m.rmse_team1_goals ?? 0).toFixed(2))}
         ${metricRow("RMSE team2 goals", parseFloat(m.rmse_team2_goals ?? 0).toFixed(2))}
+        ${metricRow("Goals MAE", parseFloat(m.team1_goals_mae ?? 0).toFixed(2))}
         ${metricRow("Trained", m.trained_date ?? "Unknown")}
-      </div>
-      ${marginBad ? `<div class="text-danger small mt-2">High RMSE margin (${rmseMargin.toFixed(0)}) indicates the player embedding bug. Retrain to fix.</div>` : ""}`;
+      </div>`;
   } catch (e) {
     $("model-metrics").innerHTML = `<div class="text-secondary small">Could not load metrics.</div>`;
   }
@@ -363,17 +378,23 @@ async function fetchFixtureFromTraining() {
 
 // ── Retrain ───────────────────────────────────────────────────────────────────
 
+function setJobRunning(running) {
+  $("train-btn").disabled = running;
+  $("tune-btn").disabled = running;
+}
+
 async function startTraining() {
-  const btn = $("train-btn");
   const logBox = $("train-log-box");
   const statusBar = $("train-status-bar");
 
-  btn.disabled = true;
+  setJobRunning(true);
   logBox.innerHTML = "";
   logBox.style.display = "block";
   statusBar.style.display = "block";
   $("train-status-label").textContent = "Starting…";
   $("train-elapsed").textContent = "";
+  $("train-progress").className = "progress-bar bg-warning progress-bar-striped progress-bar-animated";
+  $("train-progress").style.width = "100%";
   _trainingStart = Date.now();
 
   const yearFrom = parseInt($("train-year-from").value);
@@ -384,7 +405,7 @@ async function startTraining() {
     const { ok, data } = await postJSON("/api/train", { year_from: yearFrom, year_to: yearTo, epochs });
     if (!ok || data.error) {
       appendLog(`ERROR: ${data.error || "Failed to start training"}`, "error");
-      btn.disabled = false;
+      setJobRunning(false);
       return;
     }
     _trainingJobId = data.job_id;
@@ -393,7 +414,7 @@ async function startTraining() {
     pollTrainingLog();
   } catch (e) {
     appendLog(`Error: ${e.message}`, "error");
-    btn.disabled = false;
+    setJobRunning(false);
   }
 }
 
@@ -419,9 +440,8 @@ async function pollTrainingLog() {
       $("train-progress").className = d.exit_code === 0
         ? "progress-bar bg-success"
         : "progress-bar bg-danger";
-      $("train-btn").disabled = false;
+      setJobRunning(false);
       _trainingJobId = null;
-      // Reload metrics
       await loadModelMetrics();
     }
   } catch (e) {
@@ -437,6 +457,76 @@ function appendLog(text, type) {
   line.textContent = text;
   logBox.appendChild(line);
   logBox.scrollTop = logBox.scrollHeight;
+}
+
+async function startTuning() {
+  const logBox = $("train-log-box");
+  const statusBar = $("train-status-bar");
+
+  setJobRunning(true);
+  logBox.innerHTML = "";
+  logBox.style.display = "block";
+  statusBar.style.display = "block";
+  $("train-status-label").textContent = "Starting…";
+  $("train-elapsed").textContent = "";
+  $("train-progress").className = "progress-bar bg-warning progress-bar-striped progress-bar-animated";
+  $("train-progress").style.width = "100%";
+  _trainingStart = Date.now();
+
+  const yearFrom = parseInt($("train-year-from").value);
+  const yearTo = parseInt($("train-year-to").value);
+  const maxEpochs = parseInt($("train-epochs").value);
+
+  try {
+    const { ok, data } = await postJSON("/api/tune", {
+      year_from: yearFrom,
+      year_to: yearTo,
+      max_epochs: maxEpochs,
+    });
+    if (!ok || data.error) {
+      appendLog(`ERROR: ${data.error || "Failed to start tuning"}`, "error");
+      setJobRunning(false);
+      return;
+    }
+    _tuneJobId = data.job_id;
+    appendLog(`Tuning started (job ${_tuneJobId}) – 100 epochs, 2 iterations (1–2 hrs)`, "info");
+    $("train-status-label").textContent = "Tuning…";
+    pollTuningLog();
+  } catch (e) {
+    appendLog(`Error: ${e.message}`, "error");
+    setJobRunning(false);
+  }
+}
+
+async function pollTuningLog() {
+  if (!_tuneJobId) return;
+  try {
+    const d = await fetchJSON(`/api/tune/status?job_id=${_tuneJobId}`);
+    const elapsed = Math.round((Date.now() - _trainingStart) / 1000);
+    $("train-elapsed").textContent = `${elapsed}s`;
+
+    if (d.new_lines && d.new_lines.length) {
+      d.new_lines.forEach((line) => appendLog(line));
+    }
+
+    if (d.running) {
+      $("train-status-label").textContent = "Tuning…";
+      _tunePollTimer = setTimeout(pollTuningLog, 2000);
+    } else {
+      $("train-status-label").textContent = d.exit_code === 0 ? "Completed" : "Failed";
+      $("train-progress").classList.remove("progress-bar-animated");
+      $("train-progress").style.width = "100%";
+      $("train-progress").className = d.exit_code === 0
+        ? "progress-bar bg-success"
+        : "progress-bar bg-danger";
+      setJobRunning(false);
+      _tuneJobId = null;
+      await loadModelMetrics();
+    }
+  } catch (e) {
+    appendLog(`Poll error: ${e.message}`, "error");
+    _tunePollTimer = setTimeout(pollTuningLog, 4000);
+  }
 }
 
 
@@ -461,4 +551,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("fetch-historical-btn").addEventListener("click", fetchHistorical);
   $("fetch-fixture-btn").addEventListener("click", fetchFixtureFromTraining);
   $("train-btn").addEventListener("click", startTraining);
+  $("tune-btn").addEventListener("click", startTuning);
 });

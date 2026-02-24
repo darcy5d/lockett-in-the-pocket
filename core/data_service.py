@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -46,6 +47,10 @@ class DataService:
         self._data_dir = Path(data_dir) if data_dir else _DEFAULT_DATA_DIR
         self._lineup_dir = self._data_dir / "lineups"
         self._match_dir = self._data_dir / "matches"
+        self._store = None
+        if os.environ.get("USE_AFL_SQLITE") == "1" and (self._data_dir / "afl.db").exists():
+            from core.afl_data_store import AFLDataStore
+            self._store = AFLDataStore.from_path(self._data_dir)
         self._player_mapper = PlayerMapper(player_index_path)
         self._venue_mapper = VenueMapper()
         self._team_mapper = TeamNameMapper()
@@ -56,17 +61,21 @@ class DataService:
         self._grounds: list[str] = self._load_grounds()
         # Lazy-load fixture — only when first requested
         self._fixture_df: Optional[pd.DataFrame] = None
+        self._lineup_df: Optional[pd.DataFrame] = None
 
     # ------------------------------------------------------------------
     # Teams
     # ------------------------------------------------------------------
 
     def _load_teams(self) -> list[str]:
+        if self._store is not None:
+            teams = self._store.get_teams_from_lineups()
+            if teams:
+                return teams
+            # Fall back to CSV if DB has no lineups
         files = sorted(self._lineup_dir.glob("team_lineups_*.csv"))
         teams = []
         for f in files:
-            name = f.stem.replace("team_lineups_", "").replace("_", " ").title()
-            # Restore canonical internal name from filename
             raw = f.stem.replace("team_lineups_", "")
             teams.append(raw)
         return sorted(teams)
@@ -87,6 +96,11 @@ class DataService:
     # ------------------------------------------------------------------
 
     def _load_grounds(self) -> list[str]:
+        if self._store is not None:
+            grounds = self._store.get_grounds_from_matches()
+            if grounds:
+                return grounds
+            # Fall back to CSV if DB has no matches
         files = sorted(self._match_dir.glob("matches_*.csv"))
         venues: set[str] = set()
         for f in files:
@@ -118,6 +132,20 @@ class DataService:
     def _lineup_file(self, team_key: str) -> Path:
         return self._lineup_dir / f"team_lineups_{team_key}.csv"
 
+    def _get_lineup_df_for_team(self, team_key: str) -> pd.DataFrame:
+        """Lineup rows for this team (from store or CSV)."""
+        if self._store is not None:
+            if self._lineup_df is None:
+                self._lineup_df = self._store.load_lineups()
+            if self._lineup_df.empty:
+                return pd.DataFrame()
+            norm = self._lineup_df["team_name"].astype(str).str.replace(" ", "_").str.lower()
+            return self._lineup_df[norm == team_key].copy()
+        path = self._lineup_file(team_key)
+        if not path.exists():
+            return pd.DataFrame()
+        return pd.read_csv(path)
+
     @functools.lru_cache(maxsize=64)
     def get_last_lineup(self, team_key: str) -> list[dict]:
         """
@@ -126,11 +154,10 @@ class DataService:
         Returns a list of {display_name, player_id} dicts.
         player_id may be 'unknown' if not in player_index.
         """
-        path = self._lineup_file(team_key)
-        if not path.exists():
-            return []
-        df = pd.read_csv(path)
+        df = self._get_lineup_df_for_team(team_key)
         if df.empty:
+            return []
+        if "year" not in df.columns:
             return []
         latest_year = df["year"].max()
         df_year = df[df["year"] == latest_year].copy()
@@ -159,10 +186,9 @@ class DataService:
 
         Returns a list of {display_name, player_id} dicts sorted by display name.
         """
-        path = self._lineup_file(team_key)
-        if not path.exists():
+        df = self._get_lineup_df_for_team(team_key)
+        if df.empty:
             return []
-        df = pd.read_csv(path)
         year = datetime.now().year
         df_year = df[df["year"] == year]
         seen: set[str] = set()

@@ -12,6 +12,7 @@ jupyter>=1.0.0
 # Machine learning and neural networks
 tensorflow>=2.19.0
 scikit-learn>=1.0.0
+keras-tuner>=1.4.0
 
 # Web interface
 streamlit>=1.32.0

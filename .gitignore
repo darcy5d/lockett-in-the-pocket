@@ -134,6 +134,7 @@ afl_venv_3_9/
 model/output/*.h5
 model/output/*.keras
 model/output/*.joblib
+model/output/tuner/
 model/output_compatible/
 
 # Old GUI binary models

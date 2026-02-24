@@ -143,27 +143,6 @@
     </div>
   </div>
 
-  <!-- ── Training bug callout ───────────────────────────────────────────── -->
-  <div class="col-12">
-    <div class="bug-callout">
-      <div class="d-flex gap-2 align-items-start">
-        <span class="bug-icon">!</span>
-        <div>
-          <div class="bug-title">Player embeddings were untrained in the current model</div>
-          <div class="bug-body">
-            The current model was trained with all-zero player indices because the lineup CSVs store players as
-            a single <code>players</code> column (semicolon-separated full names), but the training code looked
-            for <code>player1</code>, <code>player2</code>, … columns that do not exist. Every match was
-            presented with identical player data (all zeros), so the model learned a constant output bias —
-            it cannot differentiate between teams by player composition.
-            <strong class="text-warning"> The retrain below fixes this</strong> by using
-            <code>PlayerMapper</code> to parse lineup names into real player indices before training.
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- ── Model metrics ─────────────────────────────────────────────────── -->
   <div class="col-md-6">
     <div class="card bg-black border-secondary h-100">
@@ -200,8 +179,11 @@
           </div>
         </div>
 
-        <button id="train-btn" class="btn btn-warning fw-bold w-100 mb-3">
+        <button id="train-btn" class="btn btn-warning fw-bold w-100 mb-2">
           Retrain Model
+        </button>
+        <button id="tune-btn" class="btn btn-outline-warning w-100 mb-3" title="Hyperband search: 100 epochs, 2 iterations, L2 reg (1–2 hrs)">
+          Tune hyperparameters
         </button>
 
         <div id="train-status-bar" style="display:none" class="mb-2">
