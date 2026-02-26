@@ -1,6 +1,9 @@
-# AFL Match Predictor
+# Match Predictor — AFL & Rugby League
 
-Neural network model for predicting AFL match outcomes. Ready for the **2026 season**.
+Neural network models for predicting match outcomes across multiple leagues. Ready for the **2026 season**.
+
+- **AFL** — Australian Football League (goals, behinds, margins)
+- **Rugby League** — NRL, NSW Cup, QLD Cup, UK Super League & Championship
 
 ---
 
@@ -15,6 +18,8 @@ python server/app.py
 # Then open http://localhost:5000
 ```
 
+The landing page lets you choose **AFL Match Predictor** or **Rugby League Predictor**.
+
 ---
 
 ## Setup from scratch
@@ -24,6 +29,8 @@ python -m venv afl_venv_3_9
 source afl_venv_3_9/bin/activate
 pip install -r requirements.txt
 ```
+
+**Apple Silicon (M1/M2/M3):** For GPU acceleration, see [docs/APPLE_SILICON.md](docs/APPLE_SILICON.md).
 
 ---
 
@@ -114,40 +121,54 @@ Checks team names, venue names, and player ID round-trips all pass.
 ```
 AFL/
 ├── server/                     Flask web application
-│   ├── app.py                  Routes and API endpoints
+│   ├── app.py                  Routes and API endpoints (AFL + Rugby League)
 │   ├── templates/              Jinja2 HTML templates
+│   │   ├── landing.html        League selector (AFL vs Rugby League)
+│   │   ├── index.html          AFL Match Predictor UI
+│   │   └── rugby_index.html    Rugby League Predictor UI (multi-competition)
 │   └── static/                 CSS and JS
-├── core/                       Shared, league-agnostic layer
-│   ├── mappings.py             Team / venue / player ID mapping (map-first)
-│   ├── data_service.py         DataService: teams, grounds, lineups, search
-│   └── league_config.py        (Phase B) League abstraction
-├── model/                      Neural network model
-│   ├── neural_network_with_embeddings.py   Training script
-│   ├── prediction_api.py       predict_match_outcome()
-│   ├── player_stats_api.py     Player stat helpers
+├── core/                       Shared and league-specific layers
+│   ├── mappings.py             AFL: team / venue / player ID mapping
+│   ├── data_service.py         AFL DataService
+│   ├── afl_data_store.py       AFL data access (CSV or SQLite)
+│   ├── competition_config.py   Rugby League competition registry
+│   ├── nrl_*.py                NRL: mappings, data service, feature engine, scoring eras
+│   ├── rugby_*.py              Rugby: data service, feature engine, player presence
+│   ├── nsw_cup_mappings.py     NSW Cup team/venue mappings
+│   ├── qld_cup_mappings.py     QLD Cup mappings
+│   └── uk_mappings.py          UK Super League / Championship mappings
+├── model/                      Neural network models
+│   ├── neural_network_with_embeddings.py   AFL training
+│   ├── prediction_api.py       AFL predict_match_outcome()
+│   ├── nrl_train.py            Rugby League training
+│   ├── rugby_train.py          Rugby League training (multi-competition)
+│   ├── rugby_prediction_api.py Rugby League predict_rugby_match()
 │   └── output/                 Trained model artefacts
-│       ├── model.h5
-│       ├── scaler.joblib
-│       ├── player_index.json
-│       └── feature_cols.json
+│       ├── model.h5            AFL model
+│       └── nrl/                Rugby League models per competition
 ├── afl_data/                   AFL data (scraped from AFL Tables)
 │   └── data/
 │       ├── matches/            matches_YYYY.csv (1897–2026)
 │       ├── lineups/            team_lineups_<team>.csv
 │       └── players/            <player_id>_performance_details.csv
-├── core/
-│   ├── afl_data_store.py       Data access layer (CSV or SQLite)
-│   └── ...
+├── nrl_data/                   Rugby League data (scraped from RLP)
+│   └── data/
+│       └── matches/            matches_<competition>_YYYY.csv
 ├── datafetch/                  Data pipeline scripts
 │   ├── afl_tables_scraper.py   Scrape AFL Tables → matches, lineups, player stats
-│   ├── rebuild_from_afl_tables.py   Full scrape (round-by-round with resume)
-│   ├── update_from_afl_tables.py    Gap update (new rounds/seasons)
-│   ├── fetch_2026_fixture.py   Scrape 2026 fixture
-│   ├── populate_sqlite_from_csv.py  CSV → afl.db
-│   └── load_afl_data.py        AFLDataLoader class
+│   ├── rebuild_from_afl_tables.py   AFL full scrape
+│   ├── update_from_afl_tables.py    AFL gap update
+│   ├── fetch_2026_fixture.py   AFL 2026 fixture
+│   ├── rlp_scraper.py          Rugby League Project scraper
+│   ├── rebuild_nrl_from_rlp.py Rugby League historical rebuild
+│   └── fetch_2026_nrl_fixture.py   NRL 2026 fixture
+├── docs/                       Documentation
+│   ├── APPLE_SILICON.md        Apple Silicon GPU setup
+│   └── RUGBY_LEAKAGE_INVESTIGATION.md   Data leakage diagnostics
+├── nrl_competition_history.md  NRL/NSW/QLD competition lineage & RLP slugs
 └── scripts/
-    ├── compare_data_sources.py Data validation
-    └── validate_mappings.py    Mapping validation (run after changes)
+    ├── validate_mappings.py    AFL mapping validation
+    └── diagnose_rugby_leakage.py   Rugby League leakage diagnostics
 ```
 
 ---
@@ -284,17 +305,58 @@ When Sydney vs Carlton produces a different prediction from Gold Coast vs Geelon
 
 | Source | Used for |
 |--------|----------|
-| [AFL Tables](https://afltables.com/afl/afl_index.html) | Historical matches (1990–2025), lineups, player stats — scraped directly via `datafetch/afl_tables_scraper.py` |
+| [AFL Tables](https://afltables.com/afl/afl_index.html) | AFL: historical matches (1990–2025), lineups, player stats — scraped via `datafetch/afl_tables_scraper.py` |
 | [fixturedownload.com](https://fixturedownload.com/results/afl-2026) | 2026 AFL fixture |
+| [Rugby League Project](https://www.rugbyleagueproject.org/) | Rugby League: NRL, NSW Cup, QLD Cup, UK — scraped via `datafetch/rlp_scraper.py` |
+| [League Unlimited](https://leagueunlimited.com/) | NRL 2026 fixture |
 
-AFL Tables is the canonical source for AFL match and player data (complete to end of season 2025). Our scraper writes data in CSV format with the same schema: team names (Sydney, Greater Western Sydney, etc.), venue names (S.C.G., M.C.G., Docklands), and match scores in goals.behinds form. See `datafetch/AFL_TABLES_REFERENCE.md` for URL layout and schema mapping.
+AFL Tables is the canonical source for AFL match and player data. Rugby League data is scraped from RLP calendar and round summary pages. See `datafetch/AFL_TABLES_REFERENCE.md` for AFL schema; see `nrl_competition_history.md` for RLP slug mappings and competition lineage.
 
 ---
 
-## Multi-league roadmap (Phase B)
+---
+
+## Rugby League Predictor
+
+The Rugby League Predictor supports multiple competitions with a shared neural network architecture (tries, goals, field goals). Data is scraped from [Rugby League Project](https://www.rugbyleagueproject.org/) (RLP).
+
+### Supported competitions
+
+| Competition | RLP slugs | Fixture source |
+|-------------|-----------|----------------|
+| **NRL** | nswrfl, nswrl, arl, super-league-au, nrl | League Unlimited |
+| **NSW Cup** | nsw-cup, nswrl-first-division, nswrl-reserve-grade | RLP |
+| **QLD Cup** | qld-cup, brl, qrl | RLP |
+| **UK Super League** | super-league-uk | RLP |
+| **UK Championship** | championship-uk, second-division-uk | RLP |
+
+### Rugby League data & training
+
+**Fetch NRL 2026 fixture:**
+```bash
+python datafetch/fetch_2026_nrl_fixture.py
+```
+
+**Rebuild historical data from RLP:**
+```bash
+python datafetch/rebuild_nrl_from_rlp.py --competition nrl --year-from 1998 --year-to 2025
+```
+
+**Train Rugby League model:**
+```bash
+python model/rugby_train.py --competition nrl --year-from 1998 --year-to 2025
+```
+
+**Diagnose data leakage** (if validation accuracy is suspiciously high):
+```bash
+python scripts/diagnose_rugby_leakage.py --competition nrl --year-from 2020 --year-to 2025
+```
+
+See [nrl_competition_history.md](nrl_competition_history.md) for competition lineage, RLP slug mappings, and feeder competition family trees. See [docs/RUGBY_LEAKAGE_INVESTIGATION.md](docs/RUGBY_LEAKAGE_INVESTIGATION.md) for leakage diagnostics.
+
+### Future roadmap
 
 - **AFLW**: same data structure; separate model, player index, and data directory (`aflw_data/`)
-- **NRL**: different scoring (tries, goals); placeholder at `nrl_data/`; data from Zyla NRL API or Champion Data
 
 ---
 

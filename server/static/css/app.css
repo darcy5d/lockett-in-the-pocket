@@ -340,13 +340,19 @@ body {
 
 .metric-label {
   font-size: 0.78rem;
-  color: #888;
+  color: #b8b8b8;
 }
 
 .metric-value {
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  color: #ffc107;
+}
+
+.metric-fallback {
+  font-size: 0.82rem;
+  color: #aaa;
 }
 
 /* ── Training log box ────────────────────────────────────────────────────── */
@@ -370,6 +376,16 @@ body {
 
 .log-line.log-error { color: #ff6666; }
 .log-line.log-info  { color: #6699ff; }
+
+/* ── Landing page cards ────────────────────────────────────────────────── */
+.hover-lift {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.hover-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(255, 193, 7, 0.15);
+}
 
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }

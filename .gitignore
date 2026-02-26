@@ -134,7 +134,12 @@ afl_venv_3_9/
 model/output/*.h5
 model/output/*.keras
 model/output/*.joblib
+model/output/**/*.h5
+model/output/**/*.keras
+model/output/**/*.joblib
+model/output/**/*.npz
 model/output/tuner/
+model/output/**/tuner/
 model/output_compatible/
 
 # Old GUI binary models
@@ -177,6 +182,10 @@ cython_debug/
 
 # AFL data
 afl_data/
+afl_data_old/
+
+# Rugby League data (scraped from RLP)
+nrl_data/
 
 # Temporary repository
 temp_repo/ 

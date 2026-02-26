@@ -11,8 +11,9 @@
 
   <nav class="navbar navbar-dark bg-black border-bottom border-secondary mb-4">
     <div class="container-fluid">
-      <span class="navbar-brand fw-bold fs-4 text-warning">AFL MATCH PREDICTOR</span>
+      <span class="navbar-brand fw-bold fs-4 text-warning">{% block nav_brand %}Match Predictor{% endblock %}</span>
       <div class="d-flex align-items-center gap-2">
+        {% block nav_extra %}{% endblock %}
         <span class="badge bg-secondary text-light">2026 Season</span>
       </div>
     </div>

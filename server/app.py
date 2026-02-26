@@ -31,16 +31,22 @@ import sys
 import threading
 import uuid
 from pathlib import Path
+from typing import Optional
 
 # Ensure project root is on the path when running as `python server/app.py`
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 
+from core.competition_config import COMPETITIONS
 from core.data_service import DataService
+from core.nrl_data_service import NRLDataService
+from core.rugby_data_service import RugbyDataService
 from model.prediction_api import predict_match_outcome, clear_model_cache
+from model.nrl_prediction_api import predict_nrl_match, clear_nrl_model_cache
+from model.rugby_prediction_api import predict_rugby_match, clear_rugby_model_cache
 
 # In-memory store for training jobs  {job_id: {running, lines, exit_code}}
 _training_jobs: dict = {}
@@ -49,6 +55,10 @@ _training_lock = threading.Lock()
 # In-memory store for tune jobs (same shape)
 _tune_jobs: dict = {}
 _tune_lock = threading.Lock()
+
+# In-memory store for NRL historical fetch jobs (same shape)
+_fetch_jobs: dict = {}
+_fetch_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -60,8 +70,9 @@ app = Flask(
     static_folder="static",
 )
 
-# Module-level service — loaded once at startup
+# Module-level services
 _service = DataService()
+_nrl_service = NRLDataService()
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +80,14 @@ _service = DataService()
 # ---------------------------------------------------------------------------
 
 @app.route("/")
-def index():
+def landing():
+    """League selector landing page."""
+    return render_template("landing.html")
+
+
+@app.route("/afl")
+def afl_index():
+    """AFL Match Predictor UI."""
     return render_template(
         "index.html",
         teams=_service.get_team_display_names(),
@@ -77,8 +95,27 @@ def index():
     )
 
 
+@app.route("/nrl")
+def nrl_index():
+    """Redirect to Rugby League Predictor with NRL selected."""
+    return redirect(url_for("rugby_index", competition="nrl"))
+
+
+@app.route("/rugby")
+def rugby_index():
+    """Rugby League Predictor UI — multi-competition."""
+    competition = request.args.get("competition", "nrl")
+    if competition not in COMPETITIONS:
+        competition = "nrl"
+    return render_template(
+        "rugby_index.html",
+        competitions=COMPETITIONS,
+        default_competition=competition,
+    )
+
+
 # ---------------------------------------------------------------------------
-# API routes
+# AFL API routes
 # ---------------------------------------------------------------------------
 
 @app.route("/api/teams")
@@ -332,13 +369,17 @@ def api_fetch_historical():
 
 
 def _any_job_running() -> bool:
-    """True if a train or tune job is currently running."""
+    """True if a train, tune, or fetch job is currently running."""
     with _training_lock:
         for job in _training_jobs.values():
             if job.get("running"):
                 return True
     with _tune_lock:
         for job in _tune_jobs.values():
+            if job.get("running"):
+                return True
+    with _fetch_lock:
+        for job in _fetch_jobs.values():
             if job.get("running"):
                 return True
     return False
@@ -521,8 +562,758 @@ def api_tune_status():
 
 
 # ---------------------------------------------------------------------------
+# Rugby League API routes (multi-competition)
+# ---------------------------------------------------------------------------
+
+def _rugby_service(competition_id: str) -> RugbyDataService:
+    if competition_id not in COMPETITIONS:
+        raise ValueError(f"Unknown competition: {competition_id}")
+    return RugbyDataService(competition_id)
+
+
+@app.route("/api/rugby/<competition_id>/teams")
+def api_rugby_teams(competition_id: str):
+    try:
+        return jsonify(_rugby_service(competition_id).get_team_display_names())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/grounds")
+def api_rugby_grounds(competition_id: str):
+    try:
+        return jsonify(_rugby_service(competition_id).get_grounds_display())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/lineup/<team_key>")
+def api_rugby_lineup(competition_id: str, team_key: str):
+    try:
+        return jsonify(_rugby_service(competition_id).get_last_lineup(team_key))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/season/<team_key>")
+def api_rugby_season(competition_id: str, team_key: str):
+    try:
+        return jsonify(_rugby_service(competition_id).get_season_players(team_key))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/players/search")
+def api_rugby_players_search(competition_id: str):
+    query = request.args.get("q", "").strip()
+    if not query or len(query) < 2:
+        return jsonify([])
+    try:
+        return jsonify(_rugby_service(competition_id).search_players(query, limit=30))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/predict", methods=["POST"])
+def api_rugby_predict(competition_id: str):
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON body"}), 400
+    home_player_ids = data.get("home_player_ids", [])
+    away_player_ids = data.get("away_player_ids", [])
+    if not home_player_ids or not away_player_ids:
+        return jsonify({"error": "home_player_ids and away_player_ids required"}), 400
+    min_players = 10
+    if len(home_player_ids) < min_players or len(away_player_ids) < min_players:
+        return jsonify({"error": f"Each team needs at least {min_players} players"}), 400
+    try:
+        result = predict_rugby_match(
+            competition_id,
+            home_player_ids, away_player_ids,
+            home_team=data.get("home_team", ""),
+            away_team=data.get("away_team", ""),
+            venue=data.get("ground", ""),
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if "error" in result:
+        return jsonify(result), 500
+    return jsonify({
+        "home_team": data.get("home_team", ""),
+        "away_team": data.get("away_team", ""),
+        "ground": data.get("ground", ""),
+        **result,
+    })
+
+
+@app.route("/api/rugby/<competition_id>/fixture/meta")
+def api_rugby_fixture_meta(competition_id: str):
+    try:
+        return jsonify({"last_fetched": _rugby_service(competition_id).get_fixture_last_updated()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/fixture/refresh", methods=["POST"])
+def api_rugby_fixture_refresh(competition_id: str):
+    try:
+        svc = _rugby_service(competition_id)
+        if competition_id == "nrl":
+            from datafetch.fetch_2026_nrl_fixture import fetch_and_save
+            path = fetch_and_save()
+        else:
+            return jsonify({"ok": False, "error": f"2026 fixture fetch not yet implemented for {competition_id}"}), 501
+        svc.save_fixture_meta()
+        svc._invalidate_fixture_cache()
+        return jsonify({"ok": True, "message": f"Fixture refreshed: {path.name}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/rugby/<competition_id>/fixture/rounds")
+def api_rugby_fixture_rounds(competition_id: str):
+    try:
+        return jsonify(_rugby_service(competition_id).get_fixture_rounds())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/fixture/<path:round_num>")
+def api_rugby_fixture_round(competition_id: str, round_num: str):
+    try:
+        return jsonify(_rugby_service(competition_id).get_fixture_round(round_num))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/rugby/<competition_id>/predict/round", methods=["POST"])
+def api_rugby_predict_round(competition_id: str):
+    data = request.get_json(silent=True)
+    if not data or "matches" not in data:
+        return jsonify({"error": "Body must contain {matches: [...]}"}), 400
+    try:
+        svc = _rugby_service(competition_id)
+        results = []
+        for match in data["matches"]:
+            home_key = match.get("home_team_key", "")
+            away_key = match.get("away_team_key", "")
+            home_lineup = svc.get_last_lineup(home_key)
+            away_lineup = svc.get_last_lineup(away_key)
+            home_ids = [p["player_id"] for p in home_lineup if p["player_id"] != "unknown"]
+            away_ids = [p["player_id"] for p in away_lineup if p["player_id"] != "unknown"]
+            entry = {
+                "home_team": match.get("home_team_display", home_key),
+                "away_team": match.get("away_team_display", away_key),
+                "venue": match.get("venue_display", match.get("venue", "")),
+                "date": match.get("date", ""),
+                "time_confirmed": match.get("time_confirmed", False),
+                "home_lineup_count": len(home_ids),
+                "away_lineup_count": len(away_ids),
+            }
+            if len(home_ids) < 10 or len(away_ids) < 10:
+                entry["prediction"] = None
+                entry["error"] = "Insufficient lineup data"
+            else:
+                pred = predict_rugby_match(
+                    competition_id,
+                    home_ids, away_ids,
+                    home_team=match.get("home_team_display", home_key),
+                    away_team=match.get("away_team_display", away_key),
+                    venue=match.get("venue", ""),
+                )
+                entry["prediction"] = pred if "error" not in pred else None
+                if "error" in pred:
+                    entry["error"] = pred["error"]
+            results.append(entry)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rugby/<competition_id>/data/status")
+def api_rugby_data_status(competition_id: str):
+    try:
+        import glob as _glob
+        from core.competition_config import get_competition_slugs, slug_matches_file, slug_matches_lineup_file
+        slugs = get_competition_slugs(competition_id)
+        match_dir = _PROJECT_ROOT / "nrl_data" / "data" / "matches"
+        lineup_dir = _PROJECT_ROOT / "nrl_data" / "data" / "lineups"
+        match_files = [f for f in _glob.glob(str(match_dir / "matches_*.csv")) if "2026" not in f and slug_matches_file(Path(f).name, slugs)]
+        lineup_files = [f for f in _glob.glob(str(lineup_dir / "lineup_details_*.csv")) if slug_matches_lineup_file(Path(f).name, slugs)]
+        cfg = COMPETITIONS.get(competition_id, {})
+        fixture_path = match_dir / cfg.get("fixture_filename", "matches_2026.csv")
+        fixture_matches = 0
+        if fixture_path.exists():
+            try:
+                import pandas as pd
+                df = pd.read_csv(fixture_path, usecols=["round_num"])
+                fixture_matches = len(df)
+            except Exception:
+                pass
+        years = []
+        for f in match_files:
+            try:
+                stem = Path(f).stem
+                for part in stem.replace("matches_", "").split("_"):
+                    if part.isdigit() and len(part) == 4:
+                        years.append(int(part))
+            except Exception:
+                pass
+        match_year_range = f"{min(years)}–{max(years)}" if years else ""
+        svc = _rugby_service(competition_id)
+        return jsonify({
+            "match_files": len(match_files),
+            "lineup_files": len(lineup_files),
+            "match_year_range": match_year_range,
+            "fixture_matches": fixture_matches,
+            "fixture_last_updated": svc.get_fixture_last_updated(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _run_rugby_fetch(job_id: str, competition_id: str, year_from: Optional[int], year_to: Optional[int]) -> None:
+    script = str(_PROJECT_ROOT / "datafetch/rebuild_nrl_from_rlp.py")
+    cmd = [sys.executable, script, "--competition", competition_id]
+    if year_from is not None:
+        cmd.extend(["--year-from", str(year_from)])
+    if year_to is not None:
+        cmd.extend(["--year-to", str(year_to)])
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(_PROJECT_ROOT),
+        )
+        for line in proc.stdout:
+            with _fetch_lock:
+                _fetch_jobs[job_id]["lines"].append(line.rstrip())
+        proc.wait()
+        with _fetch_lock:
+            _fetch_jobs[job_id]["running"] = False
+            _fetch_jobs[job_id]["exit_code"] = proc.returncode
+    except Exception as e:
+        with _fetch_lock:
+            _fetch_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _fetch_jobs[job_id]["running"] = False
+            _fetch_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/rugby/<competition_id>/data/fetch-historical", methods=["POST"])
+def api_rugby_fetch_historical(competition_id: str):
+    data = request.get_json(silent=True) or {}
+    year_from = data.get("year_from")
+    year_to = data.get("year_to")
+    if year_from is not None:
+        year_from = int(year_from)
+    if year_to is not None:
+        year_to = int(year_to)
+    if _any_job_running():
+        return jsonify({"error": "A training, tuning, or fetch job is already running"}), 409
+    job_id = str(uuid.uuid4())[:8]
+    with _fetch_lock:
+        _fetch_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+    threading.Thread(
+        target=_run_rugby_fetch,
+        args=(job_id, competition_id, year_from, year_to),
+        daemon=True,
+    ).start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/rugby/<competition_id>/data/fetch-historical/status")
+def api_rugby_fetch_historical_status(competition_id: str):
+    job_id = request.args.get("job_id", "")
+    with _fetch_lock:
+        job = _fetch_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    with _fetch_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+    return jsonify({
+        "running": job["running"],
+        "new_lines": new_lines,
+        "exit_code": job["exit_code"],
+    })
+
+
+@app.route("/api/rugby/<competition_id>/data/model-metrics")
+def api_rugby_model_metrics(competition_id: str):
+    cfg = COMPETITIONS.get(competition_id, {})
+    output_dir = Path(cfg.get("output_dir", str(_PROJECT_ROOT / "model" / "output" / competition_id)))
+    metrics_path = output_dir / "evaluation_metrics.txt"
+    if not metrics_path.exists():
+        return jsonify({"error": "No evaluation_metrics.txt found"})
+    metrics = {}
+    with open(metrics_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            metrics[k.strip()] = v.strip()
+    return jsonify(metrics)
+
+
+def _run_rugby_training(job_id: str, competition_id: str, year_from: int, year_to: int, epochs: int) -> None:
+    script = str(_PROJECT_ROOT / "model/rugby_train.py")
+    cmd = [sys.executable, script, "--competition", competition_id, "--year-from", str(year_from), "--year-to", str(year_to), "--epochs", str(epochs)]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=str(_PROJECT_ROOT))
+        for line in proc.stdout:
+            with _training_lock:
+                _training_jobs[job_id]["lines"].append(line.rstrip())
+        proc.wait()
+        with _training_lock:
+            _training_jobs[job_id]["running"] = False
+            _training_jobs[job_id]["exit_code"] = proc.returncode
+        if proc.returncode == 0:
+            clear_rugby_model_cache(competition_id)
+    except Exception as e:
+        with _training_lock:
+            _training_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _training_jobs[job_id]["running"] = False
+            _training_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/rugby/<competition_id>/train", methods=["POST"])
+def api_rugby_train(competition_id: str):
+    data = request.get_json(silent=True) or {}
+    year_from = int(data.get("year_from", 2020))
+    year_to = int(data.get("year_to", 2025))
+    epochs = int(data.get("epochs", 30))
+    if _any_job_running():
+        return jsonify({"error": "A training or tuning job is already running"}), 409
+    job_id = str(uuid.uuid4())[:8]
+    with _training_lock:
+        _training_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+    threading.Thread(target=_run_rugby_training, args=(job_id, competition_id, year_from, year_to, epochs), daemon=True).start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/rugby/<competition_id>/train/status")
+def api_rugby_train_status(competition_id: str):
+    job_id = request.args.get("job_id", "")
+    with _training_lock:
+        job = _training_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    with _training_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+    return jsonify({"running": job["running"], "new_lines": new_lines, "exit_code": job["exit_code"]})
+
+
+def _run_rugby_tuning(job_id: str, competition_id: str, year_from: int, year_to: int, max_epochs: int) -> None:
+    script = str(_PROJECT_ROOT / "model/nrl_tune_hyperband.py")
+    cmd = [sys.executable, script, "--competition", competition_id, "--year-from", str(year_from), "--year-to", str(year_to), "--max-epochs", str(max_epochs), "--save-final"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=str(_PROJECT_ROOT))
+        for line in proc.stdout:
+            with _tune_lock:
+                _tune_jobs[job_id]["lines"].append(line.rstrip())
+        proc.wait()
+        with _tune_lock:
+            _tune_jobs[job_id]["running"] = False
+            _tune_jobs[job_id]["exit_code"] = proc.returncode
+        if proc.returncode == 0:
+            clear_rugby_model_cache(competition_id)
+    except Exception as e:
+        with _tune_lock:
+            _tune_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _tune_jobs[job_id]["running"] = False
+            _tune_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/rugby/<competition_id>/tune", methods=["POST"])
+def api_rugby_tune(competition_id: str):
+    data = request.get_json(silent=True) or {}
+    year_from = int(data.get("year_from", 2020))
+    year_to = int(data.get("year_to", 2025))
+    max_epochs = int(data.get("max_epochs", 100))
+    if _any_job_running():
+        return jsonify({"error": "A training or tuning job is already running"}), 409
+    job_id = str(uuid.uuid4())[:8]
+    with _tune_lock:
+        _tune_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+    threading.Thread(target=_run_rugby_tuning, args=(job_id, competition_id, year_from, year_to, max_epochs), daemon=True).start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/rugby/<competition_id>/tune/status")
+def api_rugby_tune_status(competition_id: str):
+    job_id = request.args.get("job_id", "")
+    with _tune_lock:
+        job = _tune_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    with _tune_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+    return jsonify({"running": job["running"], "new_lines": new_lines, "exit_code": job["exit_code"]})
+
+
+# ---------------------------------------------------------------------------
+# NRL API routes (backward compat — delegate to rugby)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/nrl/teams")
+def api_nrl_teams():
+    return jsonify(_nrl_service.get_team_display_names())
+
+
+@app.route("/api/nrl/grounds")
+def api_nrl_grounds():
+    return jsonify(_nrl_service.get_grounds_display())
+
+
+@app.route("/api/nrl/lineup/<team_key>")
+def api_nrl_lineup(team_key: str):
+    return jsonify(_nrl_service.get_last_lineup(team_key))
+
+
+@app.route("/api/nrl/season/<team_key>")
+def api_nrl_season(team_key: str):
+    return jsonify(_nrl_service.get_season_players(team_key))
+
+
+@app.route("/api/nrl/players/search")
+def api_nrl_players_search():
+    query = request.args.get("q", "").strip()
+    if not query or len(query) < 2:
+        return jsonify([])
+    return jsonify(_nrl_service.search_players(query, limit=30))
+
+
+@app.route("/api/nrl/predict", methods=["POST"])
+def api_nrl_predict():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON body"}), 400
+    home_player_ids = data.get("home_player_ids", [])
+    away_player_ids = data.get("away_player_ids", [])
+    if not home_player_ids or not away_player_ids:
+        return jsonify({"error": "home_player_ids and away_player_ids required"}), 400
+    min_players = 10
+    if len(home_player_ids) < min_players or len(away_player_ids) < min_players:
+        return jsonify({"error": f"Each team needs at least {min_players} players"}), 400
+    result = predict_nrl_match(
+        home_player_ids, away_player_ids,
+        home_team=data.get("home_team", ""),
+        away_team=data.get("away_team", ""),
+        venue=data.get("ground", ""),
+    )
+    if "error" in result:
+        return jsonify(result), 500
+    return jsonify({
+        "home_team": data.get("home_team", ""),
+        "away_team": data.get("away_team", ""),
+        "ground": data.get("ground", ""),
+        **result,
+    })
+
+
+@app.route("/api/nrl/fixture/meta")
+def api_nrl_fixture_meta():
+    return jsonify({"last_fetched": _nrl_service.get_fixture_last_updated()})
+
+
+@app.route("/api/nrl/fixture/refresh", methods=["POST"])
+def api_nrl_fixture_refresh():
+    try:
+        from datafetch.fetch_2026_nrl_fixture import fetch_and_save
+        path = fetch_and_save()
+        _nrl_service.save_fixture_meta()
+        _nrl_service._invalidate_fixture_cache()
+        return jsonify({"ok": True, "message": f"Fixture refreshed: {path.name}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/nrl/fixture/rounds")
+def api_nrl_fixture_rounds():
+    return jsonify(_nrl_service.get_fixture_rounds())
+
+
+@app.route("/api/nrl/fixture/<path:round_num>")
+def api_nrl_fixture_round(round_num: str):
+    return jsonify(_nrl_service.get_fixture_round(round_num))
+
+
+@app.route("/api/nrl/predict/round", methods=["POST"])
+def api_nrl_predict_round():
+    data = request.get_json(silent=True)
+    if not data or "matches" not in data:
+        return jsonify({"error": "Body must contain {matches: [...]}"}), 400
+    results = []
+    for match in data["matches"]:
+        home_key = match.get("home_team_key", "")
+        away_key = match.get("away_team_key", "")
+        home_lineup = _nrl_service.get_last_lineup(home_key)
+        away_lineup = _nrl_service.get_last_lineup(away_key)
+        home_ids = [p["player_id"] for p in home_lineup if p["player_id"] != "unknown"]
+        away_ids = [p["player_id"] for p in away_lineup if p["player_id"] != "unknown"]
+        entry = {
+            "home_team": match.get("home_team_display", home_key),
+            "away_team": match.get("away_team_display", away_key),
+            "venue": match.get("venue_display", match.get("venue", "")),
+            "date": match.get("date", ""),
+            "time_confirmed": match.get("time_confirmed", False),
+            "home_lineup_count": len(home_ids),
+            "away_lineup_count": len(away_ids),
+        }
+        if len(home_ids) < 10 or len(away_ids) < 10:
+            entry["prediction"] = None
+            entry["error"] = "Insufficient lineup data"
+        else:
+            pred = predict_nrl_match(
+                home_ids, away_ids,
+                home_team=match.get("home_team_display", home_key),
+                away_team=match.get("away_team_display", away_key),
+                venue=match.get("venue", ""),
+            )
+            entry["prediction"] = pred if "error" not in pred else None
+            if "error" in pred:
+                entry["error"] = pred["error"]
+        results.append(entry)
+    return jsonify(results)
+
+
+@app.route("/api/nrl/data/status")
+def api_nrl_data_status():
+    import glob as _glob
+    match_files = _glob.glob(str(_PROJECT_ROOT / "nrl_data/data/matches/matches_*.csv"))
+    lineup_files = _glob.glob(str(_PROJECT_ROOT / "nrl_data/data/lineups/lineup_details_*.csv"))
+    fixture_2026 = _PROJECT_ROOT / "nrl_data/data/matches/matches_2026.csv"
+    fixture_matches = 0
+    if fixture_2026.exists():
+        try:
+            import pandas as pd
+            df = pd.read_csv(fixture_2026, usecols=["round_num"])
+            fixture_matches = len(df)
+        except Exception:
+            pass
+    years = []
+    for f in match_files:
+        if "2026" in f:
+            continue
+        try:
+            stem = Path(f).stem
+            for part in stem.replace("matches_", "").split("_"):
+                if part.isdigit() and len(part) == 4:
+                    years.append(int(part))
+        except Exception:
+            pass
+    match_year_range = f"{min(years)}–{max(years)}" if years else ""
+    return jsonify({
+        "match_files": len([f for f in match_files if "2026" not in f]),
+        "lineup_files": len(lineup_files),
+        "match_year_range": match_year_range,
+        "fixture_matches": fixture_matches,
+        "fixture_last_updated": _nrl_service.get_fixture_last_updated(),
+    })
+
+
+def _run_nrl_fetch(job_id: str, year_from: Optional[int], year_to: Optional[int]) -> None:
+    """Run rebuild_nrl_from_rlp.py in a subprocess, streaming output to job store."""
+    script = str(_PROJECT_ROOT / "datafetch/rebuild_nrl_from_rlp.py")
+    cmd = [sys.executable, script]
+    if year_from is not None:
+        cmd.extend(["--year-from", str(year_from)])
+    if year_to is not None:
+        cmd.extend(["--year-to", str(year_to)])
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(_PROJECT_ROOT),
+        )
+        for line in proc.stdout:
+            with _fetch_lock:
+                _fetch_jobs[job_id]["lines"].append(line.rstrip())
+        proc.wait()
+        with _fetch_lock:
+            _fetch_jobs[job_id]["running"] = False
+            _fetch_jobs[job_id]["exit_code"] = proc.returncode
+    except Exception as e:
+        with _fetch_lock:
+            _fetch_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _fetch_jobs[job_id]["running"] = False
+            _fetch_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/nrl/data/fetch-historical", methods=["POST"])
+def api_nrl_fetch_historical():
+    """Start background job to scrape full NRL lineage from Rugby League Project."""
+    data = request.get_json(silent=True) or {}
+    year_from = data.get("year_from")  # None = full lineage
+    year_to = data.get("year_to")
+    if year_from is not None:
+        year_from = int(year_from)
+    if year_to is not None:
+        year_to = int(year_to)
+    if _any_job_running():
+        return jsonify({"error": "A training, tuning, or fetch job is already running"}), 409
+    job_id = str(uuid.uuid4())[:8]
+    with _fetch_lock:
+        _fetch_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+    threading.Thread(
+        target=_run_nrl_fetch,
+        args=(job_id, year_from, year_to),
+        daemon=True,
+    ).start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/nrl/data/fetch-historical/status")
+def api_nrl_fetch_historical_status():
+    job_id = request.args.get("job_id", "")
+    with _fetch_lock:
+        job = _fetch_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    with _fetch_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+    return jsonify({
+        "running": job["running"],
+        "new_lines": new_lines,
+        "exit_code": job["exit_code"],
+    })
+
+
+@app.route("/api/nrl/data/model-metrics")
+def api_nrl_model_metrics():
+    metrics_path = _PROJECT_ROOT / "model/output/nrl/evaluation_metrics.txt"
+    if not metrics_path.exists():
+        return jsonify({"error": "No evaluation_metrics.txt found"})
+    metrics = {}
+    with open(metrics_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            metrics[k.strip()] = v.strip()
+    return jsonify(metrics)
+
+
+def _run_nrl_training(job_id: str, year_from: int, year_to: int, epochs: int) -> None:
+    script = str(_PROJECT_ROOT / "model/nrl_train.py")
+    cmd = [sys.executable, script, "--year-from", str(year_from), "--year-to", str(year_to), "--epochs", str(epochs)]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=str(_PROJECT_ROOT))
+        for line in proc.stdout:
+            with _training_lock:
+                _training_jobs[job_id]["lines"].append(line.rstrip())
+        proc.wait()
+        with _training_lock:
+            _training_jobs[job_id]["running"] = False
+            _training_jobs[job_id]["exit_code"] = proc.returncode
+        if proc.returncode == 0:
+            clear_nrl_model_cache()
+    except Exception as e:
+        with _training_lock:
+            _training_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _training_jobs[job_id]["running"] = False
+            _training_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/nrl/train", methods=["POST"])
+def api_nrl_train():
+    data = request.get_json(silent=True) or {}
+    year_from = int(data.get("year_from", 2020))
+    year_to = int(data.get("year_to", 2025))
+    epochs = int(data.get("epochs", 30))
+    if _any_job_running():
+        return jsonify({"error": "A training or tuning job is already running"}), 409
+    job_id = str(uuid.uuid4())[:8]
+    with _training_lock:
+        _training_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+    threading.Thread(target=_run_nrl_training, args=(job_id, year_from, year_to, epochs), daemon=True).start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/nrl/train/status")
+def api_nrl_train_status():
+    job_id = request.args.get("job_id", "")
+    with _training_lock:
+        job = _training_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    with _training_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+    return jsonify({"running": job["running"], "new_lines": new_lines, "exit_code": job["exit_code"]})
+
+
+def _run_nrl_tuning(job_id: str, year_from: int, year_to: int, max_epochs: int) -> None:
+    script = str(_PROJECT_ROOT / "model/nrl_tune_hyperband.py")
+    cmd = [sys.executable, script, "--year-from", str(year_from), "--year-to", str(year_to), "--max-epochs", str(max_epochs), "--save-final"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, cwd=str(_PROJECT_ROOT))
+        for line in proc.stdout:
+            with _tune_lock:
+                _tune_jobs[job_id]["lines"].append(line.rstrip())
+        proc.wait()
+        with _tune_lock:
+            _tune_jobs[job_id]["running"] = False
+            _tune_jobs[job_id]["exit_code"] = proc.returncode
+        if proc.returncode == 0:
+            clear_nrl_model_cache()
+    except Exception as e:
+        with _tune_lock:
+            _tune_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _tune_jobs[job_id]["running"] = False
+            _tune_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/nrl/tune", methods=["POST"])
+def api_nrl_tune():
+    data = request.get_json(silent=True) or {}
+    year_from = int(data.get("year_from", 2020))
+    year_to = int(data.get("year_to", 2025))
+    max_epochs = int(data.get("max_epochs", 100))
+    if _any_job_running():
+        return jsonify({"error": "A training or tuning job is already running"}), 409
+    job_id = str(uuid.uuid4())[:8]
+    with _tune_lock:
+        _tune_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+    threading.Thread(target=_run_nrl_tuning, args=(job_id, year_from, year_to, max_epochs), daemon=True).start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/nrl/tune/status")
+def api_nrl_tune_status():
+    job_id = request.args.get("job_id", "")
+    with _tune_lock:
+        job = _tune_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    with _tune_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+    return jsonify({"running": job["running"], "new_lines": new_lines, "exit_code": job["exit_code"]})
+
+
+# ---------------------------------------------------------------------------
 # Dev server
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import os
+    port = int(os.environ.get("PORT", 5001))  # 5001 default: macOS AirPlay uses 5000
+    app.run(debug=True, port=port)

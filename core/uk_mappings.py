@@ -1,0 +1,108 @@
+"""
+UK Super League and Championship mappings — RLP team/venue names to display format.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# UK Super League & Championship teams
+TEAM_INTERNAL_TO_DISPLAY: dict[str, str] = {
+    "St Helens": "St Helens",
+    "Wigan": "Wigan Warriors",
+    "Leeds": "Leeds Rhinos",
+    "Warrington": "Warrington Wolves",
+    "Hull": "Hull FC",
+    "Hull KR": "Hull KR",
+    "Catalans": "Catalans Dragons",
+    "Castleford": "Castleford Tigers",
+    "Huddersfield": "Huddersfield Giants",
+    "Salford": "Salford Red Devils",
+    "Wakefield": "Wakefield Trinity",
+    "Leigh": "Leigh Leopards",
+    "London": "London Broncos",
+    "Bradford": "Bradford Bulls",
+    "Featherstone": "Featherstone Rovers",
+    "Toulouse": "Toulouse Olympique",
+    "Sheffield": "Sheffield Eagles",
+    "Widnes": "Widnes Vikings",
+    "Halifax": "Halifax Panthers",
+    "Batley": "Batley Bulldogs",
+    "Dewsbury": "Dewsbury Rams",
+    "York": "York Knights",
+    "Newcastle": "Newcastle Thunder",
+    "Whitehaven": "Whitehaven",
+    "Barrow": "Barrow Raiders",
+}
+
+TEAM_EXTERNAL_TO_INTERNAL = {v: k for k, v in TEAM_INTERNAL_TO_DISPLAY.items()}
+for k in TEAM_INTERNAL_TO_DISPLAY:
+    if k not in TEAM_EXTERNAL_TO_INTERNAL:
+        TEAM_EXTERNAL_TO_INTERNAL[k] = k
+
+VENUE_INTERNAL_TO_DISPLAY: dict[str, str] = {
+    "Totally Wicked Stadium": "Totally Wicked Stadium",
+    "DW Stadium": "DW Stadium",
+    "Headingley": "Headingley Stadium",
+    "Halliwell Jones Stadium": "Halliwell Jones Stadium",
+    "MKM Stadium": "MKM Stadium",
+    "Craven Park": "Craven Park (Hull KR)",
+    "Stade Gilbert Brutus": "Stade Gilbert Brutus",
+    "Wheldon Road": "Wheldon Road",
+    "John Smith's Stadium": "John Smith's Stadium",
+    "AJ Bell Stadium": "AJ Bell Stadium",
+    "Belle Vue": "Belle Vue",
+    "Leigh Sports Village": "Leigh Sports Village",
+    "Plough Lane": "Plough Lane",
+}
+
+VENUE_EXTERNAL_TO_INTERNAL = {v: k for k, v in VENUE_INTERNAL_TO_DISPLAY.items()}
+for k in VENUE_INTERNAL_TO_DISPLAY:
+    if k not in VENUE_EXTERNAL_TO_INTERNAL:
+        VENUE_EXTERNAL_TO_INTERNAL[k] = k
+
+
+class TeamMapper:
+    def to_internal(self, external: str) -> str:
+        return TEAM_EXTERNAL_TO_INTERNAL.get(external.strip(), external.strip())
+
+    def to_display(self, internal: str) -> str:
+        return TEAM_INTERNAL_TO_DISPLAY.get(internal.strip(), internal.strip())
+
+    def all_internal(self) -> list[str]:
+        return list(TEAM_INTERNAL_TO_DISPLAY.keys())
+
+
+class VenueMapper:
+    def to_internal(self, external: str) -> str:
+        return VENUE_EXTERNAL_TO_INTERNAL.get(external.strip(), external.strip())
+
+    def to_display(self, internal: str) -> str:
+        return VENUE_INTERNAL_TO_DISPLAY.get(internal.strip(), internal.strip())
+
+    def all_internal(self) -> list[str]:
+        return list(VENUE_INTERNAL_TO_DISPLAY.keys())
+
+
+class PlayerMapper:
+    def __init__(self, player_index_path: Optional[Path] = None):
+        self._index_path = player_index_path or (
+            _PROJECT_ROOT / "model" / "output" / "uk-super-league" / "player_index.json"
+        )
+        self._id_to_display: dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self._index_path.exists():
+            return
+        import json
+        with open(self._index_path) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            self._id_to_display = {k: v for k, v in data.items() if k != "unknown"}
+
+    def to_display(self, player_id: str) -> str:
+        return self._id_to_display.get(str(player_id), f"Player {player_id}")
