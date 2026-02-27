@@ -81,7 +81,7 @@ class RugbyDataService:
 
         self._fixture_filename = cfg.get("fixture_filename", "matches_2026.csv")
         self._fixture_path = self._match_dir / self._fixture_filename
-        self._fixture_meta_path = self._match_dir / "fixture_2026_meta.json"
+        self._fixture_meta_path = self._match_dir / f"fixture_2026_meta_{competition_id}.json"
         self._teams: list[str] = self._load_teams()
         self._grounds: list[str] = self._load_grounds()
         self._fixture_df: Optional[pd.DataFrame] = None
@@ -148,6 +148,10 @@ class RugbyDataService:
                 self._lineup_df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
         return self._lineup_df
 
+    def _get_fixture_slug(self) -> str:
+        """Slug for 2026 fixture match_ids (matches lineup scraper)."""
+        return "nrl" if self._competition_id == "nrl" else "super-league-uk"
+
     @functools.lru_cache(maxsize=64)
     def get_last_lineup(self, team_key: str) -> list[dict]:
         df = self._load_lineup_df()
@@ -164,6 +168,26 @@ class RugbyDataService:
             try:
                 m = pd.read_csv(path, usecols=["match_id", "year", "round_num"], dtype=str)
                 matches_df = pd.concat([matches_df, m], ignore_index=True)
+            except Exception:
+                pass
+        # Include 2026 fixture so scraped lineups (nrl_2026_r1_m0 etc) are found
+        if self._fixture_path.exists():
+            try:
+                fix = pd.read_csv(self._fixture_path, dtype=str)
+                if not fix.empty and "round_num" in fix.columns:
+                    slug = self._get_fixture_slug()
+                    year = "2026"
+                    idx_per_round: dict[str, int] = {}
+                    rows = []
+                    for _, r in fix.iterrows():
+                        rn = str(r.get("round_num", "")).strip()
+                        if rn not in idx_per_round:
+                            idx_per_round[rn] = 0
+                        mid = f"{slug}_{year}_r{rn}_m{idx_per_round[rn]}"
+                        idx_per_round[rn] += 1
+                        rows.append({"match_id": mid, "year": year, "round_num": rn})
+                    if rows:
+                        matches_df = pd.concat([matches_df, pd.DataFrame(rows)], ignore_index=True)
             except Exception:
                 pass
         if matches_df.empty:

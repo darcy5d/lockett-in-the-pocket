@@ -51,6 +51,8 @@ TEAM_EXTERNAL_TO_INTERNAL: dict[str, str] = {v: k for k, v in TEAM_INTERNAL_TO_D
 for k in TEAM_INTERNAL_TO_DISPLAY:
     if k not in TEAM_EXTERNAL_TO_INTERNAL:
         TEAM_EXTERNAL_TO_INTERNAL[k] = k
+# League Unlimited short form
+TEAM_EXTERNAL_TO_INTERNAL["Warriors"] = "Warriors"
 
 # ---------------------------------------------------------------------------
 # VENUE MAPPING
@@ -69,9 +71,26 @@ VENUE_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "McDonald Jones Stadium": "McDonald Jones Stadium",
     "Queensland Country Bank Stadium": "Queensland Country Bank Stadium",
     "Western Sydney Stadium": "CommBank Stadium",
+    # League Unlimited 2026 venues
+    "Go Media Stadium": "Go Media Stadium",
+    "Ocean Protect Stadium": "Ocean Protect Stadium",
+    "GIO Stadium Canberra": "GIO Stadium Canberra",
+    "Polytec Stadium": "Polytec Stadium",
+    "Cbus Super Stadium": "Cbus Super Stadium",
+    "WIN Stadium": "WIN Stadium",
+    "Carrington Park": "Carrington Park",
+    "TIO Stadium": "TIO Stadium",
+    "Sky Stadium": "Sky Stadium",
+    "One New Zealand Stadium": "One New Zealand Stadium",
+    "Kayo Stadium": "Kayo Stadium",
+    "Accor Stadium": "Accor Stadium",
+    "Optus Stadium": "Optus Stadium",
+    "Leichhardt Oval": "Leichhardt Oval",
 }
 
 VENUE_EXTERNAL_TO_INTERNAL: dict[str, str] = {v: k for k, v in VENUE_INTERNAL_TO_DISPLAY.items()}
+# League Unlimited uses "Jubilee Stadium" for Netstrata Jubilee Stadium
+VENUE_EXTERNAL_TO_INTERNAL["Jubilee Stadium"] = "Netstrata Jubilee Stadium"
 
 # ---------------------------------------------------------------------------
 # 1997/1998 CLUB MAPPING (for ELO propagation)

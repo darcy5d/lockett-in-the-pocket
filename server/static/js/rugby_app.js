@@ -143,6 +143,7 @@ function renderRoundResults(results, roundLabel) {
     } else {
       const s1 = Math.round(pred.team1_score || 0);
       const s2 = Math.round(pred.team2_score || 0);
+      const displayMargin = Math.abs(s1 - s2);
       const homeWins = (pred.margin || 0) > 0;
       const pHome = (pred.p_home_win || 0) * 100;
       const pAway = (pred.p_away_win || 0) * 100;
@@ -156,7 +157,7 @@ function renderRoundResults(results, roundLabel) {
         <td class="text-center"><span class="prob-pill ${!homeWins ? "winner" : "loser"}">${pAway.toFixed(0)}%</span></td>
         <td class="${!homeWins ? "text-warning fw-bold" : "text-secondary"}">${r.away_team}</td>
         <td class="text-center"><span class="score-display">${s1} – ${s2}</span></td>
-        <td class="text-center"><span class="margin-display">${pred.margin === 0 ? "Draw" : `${Math.abs(pred.margin).toFixed(0)} pts`}</span></td>`;
+        <td class="text-center"><span class="margin-display">${displayMargin === 0 ? "Draw" : `${displayMargin} pts`}</span></td>`;
     }
     tbody.appendChild(tr);
   });
@@ -177,6 +178,100 @@ async function refreshFixture() {
     } else alert(`Failed: ${data.error || "unknown"}`);
   } catch (e) { alert(`Error: ${e.message}`); }
   finally { btn.disabled = false; btn.textContent = "Fetch 2026 Fixture"; }
+}
+
+async function fetchLineups() {
+  const btn = $("fetch-lineups-btn");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "Fetching…";
+  try {
+    const round = $("round-select")?.value || null;
+    const body = round ? { round_num: round } : {};
+    const { ok, data } = await postJSON(`${apiBase()}/lineup/refresh`, body);
+    if (ok && data.ok) {
+      alert(`Done: ${data.message}`);
+      const r = $("round-select")?.value;
+      if (r) await loadRound(r);
+    } else alert(`Failed: ${data.error || "unknown"}`);
+  } catch (e) { alert(`Error: ${e.message}`); }
+  finally { btn.disabled = false; btn.textContent = "Fetch Round Lineups"; }
+}
+
+function resetBuildCacheUI(btn, statusEl) {
+  if (btn) { btn.disabled = false; btn.textContent = "Build Player Cache"; }
+  if (statusEl) statusEl.style.display = "none";
+}
+
+async function buildPlayerCache() {
+  const btn = $("build-cache-btn");
+  const statusEl = $("build-cache-status");
+  const statusText = $("build-cache-status-text");
+  if (!btn) return;
+  const rebuild = !!($("build-cache-rebuild")?.checked);
+  btn.disabled = true;
+  btn.textContent = "Building…";
+  if (statusEl && statusText) {
+    statusEl.style.display = "block";
+    statusText.textContent = rebuild
+      ? "Full rebuild… (re-fetching all players, may take longer)"
+      : "Starting… (may take 2–5 min)";
+  }
+  try {
+    const { ok, data } = await postJSON(`${apiBase()}/lineup/build-cache`, { rebuild });
+    const jobId = data?.job_id;
+    if (!ok || !data?.ok || !jobId) {
+      resetBuildCacheUI(btn, statusEl);
+      alert(`Failed: ${data?.error || "Could not start build"}`);
+      return;
+    }
+    const poll = async () => {
+      try {
+        const s = await fetchJSON(`${apiBase()}/lineup/build-cache/status?job_id=${encodeURIComponent(jobId)}`);
+        if (statusText) {
+          if (s.running) {
+            const { current, total } = s;
+            statusText.textContent = total > 0
+              ? `Fetching ${current}/${total} players from RLP…`
+              : "Fetching DOB from RLP…";
+          } else if (s.result) {
+            statusText.textContent = s.result.message || "Done.";
+          } else if (s.error) {
+            statusText.textContent = `Error: ${s.error}`;
+          }
+        }
+        if (!s.running) {
+          btn.disabled = false;
+          btn.textContent = "Build Player Cache";
+          if (s.result) {
+            if (statusText) statusText.textContent = s.result.message;
+            if (statusEl) statusEl.style.display = "block";
+            if (statusEl) statusEl.querySelector(".spinner-border")?.remove();
+            setTimeout(() => { if (statusEl) statusEl.style.display = "none"; }, 5000);
+          } else if (s.error) {
+            if (statusText) statusText.textContent = `Error: ${s.error}`;
+            if (statusEl) statusEl.style.display = "block";
+            setTimeout(() => resetBuildCacheUI(btn, statusEl), 5000);
+          } else {
+            resetBuildCacheUI(btn, statusEl);
+          }
+          return;
+        }
+      } catch (e) {
+        resetBuildCacheUI(btn, statusEl);
+        const msg = e.message && e.message.includes("404")
+          ? "Build status not found. Server may have restarted—try again."
+          : e.message;
+        alert(`Error: ${msg}`);
+        return;
+      }
+      setTimeout(poll, 500);
+    };
+    poll();
+  } catch (e) {
+    resetBuildCacheUI(btn, statusEl);
+    alert(`Error: ${e.message}`);
+  }
 }
 
 async function initTrainingTab() {
@@ -392,6 +487,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("round-select").addEventListener("change", (e) => { if (e.target.value) loadRound(e.target.value); });
   $("predict-round-btn").addEventListener("click", predictRound);
   $("refresh-fixture-btn").addEventListener("click", refreshFixture);
+  const buildCacheBtn = $("build-cache-btn");
+  if (buildCacheBtn) buildCacheBtn.addEventListener("click", buildPlayerCache);
+  $("fetch-lineups-btn")?.addEventListener("click", fetchLineups);
   $("refresh-data-btn").addEventListener("click", loadDataStatus);
   $("fetch-historical-btn").addEventListener("click", fetchHistorical);
   $("fetch-fixture-btn").addEventListener("click", fetchFixture);

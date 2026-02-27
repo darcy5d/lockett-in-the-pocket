@@ -126,6 +126,7 @@ function renderRoundResults(results, roundLabel) {
     } else {
       const s1 = Math.round(pred.team1_score || 0);
       const s2 = Math.round(pred.team2_score || 0);
+      const displayMargin = Math.abs(s1 - s2);
       const homeWins = (pred.margin || 0) > 0;
       const pHome = (pred.p_home_win || 0) * 100;
       const pAway = (pred.p_away_win || 0) * 100;
@@ -139,7 +140,7 @@ function renderRoundResults(results, roundLabel) {
         <td class="text-center"><span class="prob-pill ${!homeWins ? "winner" : "loser"}">${pAway.toFixed(0)}%</span></td>
         <td class="${!homeWins ? "text-warning fw-bold" : "text-secondary"}">${r.away_team}</td>
         <td class="text-center"><span class="score-display">${s1} – ${s2}</span></td>
-        <td class="text-center"><span class="margin-display">${pred.margin === 0 ? "Draw" : `${Math.abs(pred.margin).toFixed(0)} pts`}</span></td>`;
+        <td class="text-center"><span class="margin-display">${displayMargin === 0 ? "Draw" : `${displayMargin} pts`}</span></td>`;
     }
     tbody.appendChild(tr);
   });

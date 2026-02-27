@@ -52,6 +52,10 @@ from model.rugby_prediction_api import predict_rugby_match, clear_rugby_model_ca
 _training_jobs: dict = {}
 _training_lock = threading.Lock()
 
+# In-memory store for rugby lineup build-cache jobs {job_id: {running, current, total, result, error}}
+_build_cache_jobs: dict = {}
+_build_cache_lock = threading.Lock()
+
 # In-memory store for tune jobs (same shape)
 _tune_jobs: dict = {}
 _tune_lock = threading.Lock()
@@ -254,7 +258,7 @@ def api_predict_round():
             "away_lineup_count": len(away_ids),
         }
 
-        if len(home_ids) < 10 or len(away_ids) < 10:
+        if len(home_ids) < 8 or len(away_ids) < 8:
             entry["prediction"] = None
             entry["error"] = "Insufficient lineup data"
         else:
@@ -661,11 +665,96 @@ def api_rugby_fixture_refresh(competition_id: str):
         if competition_id == "nrl":
             from datafetch.fetch_2026_nrl_fixture import fetch_and_save
             path = fetch_and_save()
+        elif competition_id == "uk-super-league":
+            from datafetch.fetch_2026_super_league_fixture import fetch_and_save
+            path = fetch_and_save()
         else:
             return jsonify({"ok": False, "error": f"2026 fixture fetch not yet implemented for {competition_id}"}), 501
         svc.save_fixture_meta()
         svc._invalidate_fixture_cache()
         return jsonify({"ok": True, "message": f"Fixture refreshed: {path.name}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _competition_to_cache_slug(competition_id: str) -> str:
+    """Map API competition_id to build_cache competition slug."""
+    return "super-league-uk" if competition_id == "uk-super-league" else "nrl"
+
+
+def _run_build_cache(job_id: str, competition_id: str, rebuild: bool = False) -> None:
+    """Run build_cache in thread, updating job progress."""
+    slug = _competition_to_cache_slug(competition_id)
+
+    def progress_cb(current: int, total: int) -> None:
+        with _build_cache_lock:
+            if job_id in _build_cache_jobs:
+                _build_cache_jobs[job_id]["current"] = current
+                _build_cache_jobs[job_id]["total"] = total
+
+    try:
+        from scripts.build_rlp_player_dob_cache import build_cache
+        cache = build_cache(competition=slug, delay=0.3, progress_callback=progress_cb, rebuild=rebuild)
+        with _build_cache_lock:
+            if job_id in _build_cache_jobs:
+                _build_cache_jobs[job_id]["running"] = False
+                _build_cache_jobs[job_id]["result"] = {"ok": True, "message": f"Player cache built: {len(cache)} entries"}
+    except Exception as e:
+        with _build_cache_lock:
+            if job_id in _build_cache_jobs:
+                _build_cache_jobs[job_id]["running"] = False
+                _build_cache_jobs[job_id]["error"] = str(e)
+
+
+@app.route("/api/rugby/<competition_id>/lineup/build-cache", methods=["POST"])
+def api_rugby_lineup_build_cache(competition_id: str):
+    """Start build cache job. Returns job_id for polling status."""
+    if competition_id not in ("nrl", "uk-super-league"):
+        return jsonify({"ok": False, "error": f"Cache build not implemented for {competition_id}"}), 501
+    data = request.get_json(silent=True) or {}
+    rebuild = bool(data.get("rebuild", False))
+    job_id = str(uuid.uuid4())[:8]
+    with _build_cache_lock:
+        _build_cache_jobs[job_id] = {"running": True, "current": 0, "total": 0, "result": None, "error": None}
+    threading.Thread(target=_run_build_cache, args=(job_id, competition_id), kwargs={"rebuild": rebuild}, daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/rugby/<competition_id>/lineup/build-cache/status")
+def api_rugby_lineup_build_cache_status(competition_id: str):
+    """Poll build cache job. Returns running, current, total, result, error."""
+    job_id = request.args.get("job_id", "")
+    with _build_cache_lock:
+        job = _build_cache_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+    return jsonify({
+        "running": job["running"],
+        "current": job["current"],
+        "total": job["total"],
+        "result": job.get("result"),
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/rugby/<competition_id>/lineup/refresh", methods=["POST"])
+def api_rugby_lineup_refresh(competition_id: str):
+    """Scrape League Unlimited Teams pages for fixture matches and update lineup CSV."""
+    try:
+        if competition_id not in ("nrl", "uk-super-league"):
+            return jsonify({"ok": False, "error": f"Lineup fetch not implemented for {competition_id}"}), 501
+        data = request.get_json(silent=True) or {}
+        round_filter = data.get("round_num")
+        from datafetch.league_unlimited_lineup_scraper import scrape_lineups
+        path = scrape_lineups(
+            competition_id=competition_id,
+            year=2026,
+            round_filter=round_filter,
+            delay=0.3,
+        )
+        return jsonify({"ok": True, "message": f"Lineups refreshed: {path.name}"})
+    except FileNotFoundError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -710,7 +799,7 @@ def api_rugby_predict_round(competition_id: str):
                 "home_lineup_count": len(home_ids),
                 "away_lineup_count": len(away_ids),
             }
-            if len(home_ids) < 10 or len(away_ids) < 10:
+            if len(home_ids) < 8 or len(away_ids) < 8:
                 entry["prediction"] = None
                 entry["error"] = "Insufficient lineup data"
             else:
@@ -1069,7 +1158,7 @@ def api_nrl_predict_round():
             "home_lineup_count": len(home_ids),
             "away_lineup_count": len(away_ids),
         }
-        if len(home_ids) < 10 or len(away_ids) < 10:
+        if len(home_ids) < 8 or len(away_ids) < 8:
             entry["prediction"] = None
             entry["error"] = "Insufficient lineup data"
         else:

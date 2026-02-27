@@ -42,6 +42,9 @@ TEAM_EXTERNAL_TO_INTERNAL = {v: k for k, v in TEAM_INTERNAL_TO_DISPLAY.items()}
 for k in TEAM_INTERNAL_TO_DISPLAY:
     if k not in TEAM_EXTERNAL_TO_INTERNAL:
         TEAM_EXTERNAL_TO_INTERNAL[k] = k
+# League Unlimited short forms (internal names used as display)
+for internal in TEAM_INTERNAL_TO_DISPLAY:
+    TEAM_EXTERNAL_TO_INTERNAL[internal] = internal
 
 VENUE_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "Totally Wicked Stadium": "Totally Wicked Stadium",
@@ -63,6 +66,12 @@ VENUE_EXTERNAL_TO_INTERNAL = {v: k for k, v in VENUE_INTERNAL_TO_DISPLAY.items()
 for k in VENUE_INTERNAL_TO_DISPLAY:
     if k not in VENUE_EXTERNAL_TO_INTERNAL:
         VENUE_EXTERNAL_TO_INTERNAL[k] = k
+# League Unlimited 2026 venues
+VENUE_EXTERNAL_TO_INTERNAL["The Brick Community Stadium"] = "DW Stadium"
+VENUE_EXTERNAL_TO_INTERNAL["OneBore Stadium"] = "Wheldon Road"
+VENUE_EXTERNAL_TO_INTERNAL["Odsal Stadium"] = "Odsal Stadium"
+if "Odsal Stadium" not in VENUE_INTERNAL_TO_DISPLAY:
+    VENUE_INTERNAL_TO_DISPLAY["Odsal Stadium"] = "Odsal Stadium"
 
 
 class TeamMapper:

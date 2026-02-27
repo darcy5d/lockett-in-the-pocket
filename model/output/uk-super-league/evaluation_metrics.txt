@@ -1,0 +1,6 @@
+MAE team1_score: 8.97
+MAE team2_score: 8.81
+MAE margin: 14.22
+RMSE margin: 18.14
+Winner accuracy: 69.7%
+Margin bias: 0.88
