@@ -41,13 +41,38 @@
             Predict Whole Round
           </button>
 
+          <button id="refresh-lineups-btn" class="btn btn-sm btn-outline-warning" title="Scrape latest team lineups from AFL.com.au">
+            Refresh Lineups
+          </button>
+
           <div class="ms-auto d-flex align-items-center gap-2">
+            <span id="lineup-freshness" class="text-secondary small"></span>
             <span id="fixture-freshness" class="text-secondary small"></span>
             <button id="refresh-fixture-btn" class="btn btn-sm btn-outline-secondary">
               Refresh Fixture
             </button>
+            <button id="update-scores-btn" class="btn btn-sm btn-outline-success" title="Get completed match scores from AFL Tables">
+              Update Scores
+            </button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Lineup scrape status bar ────────────────────────────────────────── -->
+  <div class="col-12" id="lineup-status-section" style="display:none">
+    <div class="card bg-black border-warning">
+      <div class="card-body py-2">
+        <div class="d-flex align-items-center gap-2">
+          <span class="text-warning small fw-bold" id="lineup-status-label">Scraping lineups…</span>
+          <div class="flex-grow-1">
+            <div class="progress" style="height:3px">
+              <div id="lineup-progress" class="progress-bar bg-warning progress-bar-striped progress-bar-animated" style="width:100%"></div>
+            </div>
+          </div>
+        </div>
+        <div id="lineup-log-box" class="train-log mt-2" style="display:none; max-height:120px"></div>
       </div>
     </div>
   </div>
@@ -171,25 +196,30 @@
           <div class="col-4">
             <label class="form-label text-secondary small">Train from year</label>
             <input id="train-year-from" type="number" class="form-control form-control-sm bg-dark text-light border-secondary"
-                   value="1990" min="1897" max="2025" />
+                   value="1990" min="1897" max="2026" />
           </div>
           <div class="col-4">
             <label class="form-label text-secondary small">Train to year</label>
             <input id="train-year-to" type="number" class="form-control form-control-sm bg-dark text-light border-secondary"
-                   value="2025" min="1897" max="2025" />
+                   value="2026" min="1897" max="2026" />
           </div>
           <div class="col-4">
             <label class="form-label text-secondary small">Max epochs</label>
             <input id="train-epochs" type="number" class="form-control form-control-sm bg-dark text-light border-secondary"
-                   value="20" min="1" max="200" />
+                   value="50" min="1" max="200" title="Training iterations (50=balanced, 100=thorough)" />
           </div>
         </div>
 
-        <button id="train-btn" class="btn btn-warning fw-bold w-100 mb-2">
+        <button id="train-btn" class="btn btn-warning fw-bold w-100 mb-2" 
+                title="Advanced training with custom parameters (includes current season data)">
           Retrain Model
         </button>
-        <button id="tune-btn" class="btn btn-outline-warning w-100 mb-3" title="Hyperband search: 100 epochs, 2 iterations, L2 reg (1–2 hrs)">
+        <button id="tune-btn" class="btn btn-outline-warning w-100 mb-2" title="Hyperband search: 100 epochs, 2 iterations, L2 reg (1–2 hrs)">
           Tune hyperparameters
+        </button>
+
+        <button id="update-model-btn" class="btn btn-outline-primary w-100 mb-3" title="Retrain model with latest completed matches (auto-detects current year)">
+          <i class="fas fa-brain"></i> Update Model
         </button>
 
         <div id="train-status-bar" style="display:none" class="mb-2">

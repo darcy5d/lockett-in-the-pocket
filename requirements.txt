@@ -20,3 +20,7 @@ flask>=3.0.0
 streamlit>=1.32.0
 dash>=2.16.1
 joblib>=1.3.0
+
+# Web scraping (AFL lineup scraper — headless Chromium)
+playwright>=1.40.0
+beautifulsoup4>=4.12.0

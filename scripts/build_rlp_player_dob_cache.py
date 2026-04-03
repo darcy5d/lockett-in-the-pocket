@@ -138,9 +138,13 @@ def build_cache(
     cache_path = cache_path or CACHE_PATH
 
     # Slug patterns for competition (from competition_config)
-    slugs = {"nrl": ["nrl", "nswrfl", "nswrl", "arl"], "super-league-uk": ["super-league-uk"]}.get(
-        competition, ["nrl"]
-    )
+    slugs = {
+        "nrl": ["nrl", "nswrfl", "nswrl", "arl"],
+        "super-league-uk": ["super-league-uk"],
+        "nsw-cup": ["nsw-cup"],
+        "qld-cup": ["qld-cup"],
+        "championship-uk": ["championship-uk"],
+    }.get(competition, [competition] if competition else ["nrl"])
     slug_set = set(slugs)
 
     # Collect unique player_ids from lineup files

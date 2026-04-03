@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -75,12 +76,22 @@ _HEADERS = {
 }
 
 
-def _scrape_fixture_table(url: str, timeout: int = 30) -> pd.DataFrame:
+def _scrape_fixture_table(url: str, timeout: int = 60, retries: int = 3) -> pd.DataFrame:
     """
     Scrape the fixture table from fixturedownload.com HTML page.
     Returns a DataFrame with columns matching the HTML table headers.
+    Uses longer timeout and retries to handle slow/unreliable responses.
     """
-    resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+    last_err = None
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+            break
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))  # 2s, 4s backoff
+            else:
+                raise
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     table = soup.find("table")
@@ -118,6 +129,66 @@ def _parse_round(round_str: str) -> str:
         return r
 
 
+def _parse_fixturedownload_result(result_str: str) -> tuple[int | None, int | None]:
+    """
+    Parse fixturedownload Result column (e.g., "119 - 65") into home/away scores.
+    
+    Args:
+        result_str: Result string from fixturedownload (e.g., "119 - 65", "-", or empty)
+    
+    Returns:
+        tuple: (home_score, away_score) or (None, None) if no valid result
+    """
+    if not result_str or pd.isna(result_str):
+        return None, None
+        
+    result_str = str(result_str).strip()
+    
+    # Check for valid result format: "119 - 65"
+    if " - " in result_str:
+        try:
+            parts = result_str.split(" - ")
+            if len(parts) == 2:
+                home_score = int(parts[0].strip())
+                away_score = int(parts[1].strip())
+                # Basic validation - AFL scores are typically 0-200
+                if 0 <= home_score <= 300 and 0 <= away_score <= 300:
+                    return home_score, away_score
+        except (ValueError, IndexError):
+            pass
+    
+    return None, None
+
+
+def _convert_total_score_to_goals_behinds(total_score: int) -> tuple[int, int]:
+    """
+    Convert total AFL score back to approximate goals.behinds format.
+    
+    This is an approximation since we don't have the actual breakdown,
+    but it provides reasonable estimates for display purposes.
+    
+    Args:
+        total_score: Total AFL score (goals * 6 + behinds)
+        
+    Returns:
+        tuple: (goals, behinds) approximation
+    """
+    if total_score < 0:
+        return 0, 0
+        
+    # Simple approximation: assume roughly 1 behind per 2 goals on average
+    # Goals account for roughly 80-85% of total score in typical matches
+    estimated_goals = round(total_score / 7)  # Rough estimate
+    estimated_behinds = total_score - (estimated_goals * 6)
+    
+    # Ensure behinds are non-negative
+    if estimated_behinds < 0:
+        estimated_goals = total_score // 6
+        estimated_behinds = total_score % 6
+        
+    return estimated_goals, estimated_behinds
+
+
 def transform_fixture(df: pd.DataFrame) -> pd.DataFrame:
     """Normalise scraped fixturedownload DataFrame into akareen schema."""
     for col in [FD_ROUND, FD_DATE, FD_LOCATION, FD_HOME, FD_AWAY]:
@@ -136,6 +207,9 @@ def transform_fixture(df: pd.DataFrame) -> pd.DataFrame:
         team1 = _team_mapper.to_internal(home_raw)
         team2 = _team_mapper.to_internal(away_raw)
 
+        # Parse result if available (e.g., "119 - 65" for completed matches)
+        home_score, away_score = _parse_fixturedownload_result(row.get(FD_RESULT, ""))
+        
         record: dict = {
             "round_num": round_num,
             "venue": venue,
@@ -145,8 +219,26 @@ def transform_fixture(df: pd.DataFrame) -> pd.DataFrame:
             "team_1_team_name": team1,
             "team_2_team_name": team2,
         }
+        
+        # Initialize all score columns to None
         for col in SCORE_COLS:
             record[col] = None
+            
+        # If we have valid results from fixturedownload, use them
+        if home_score is not None and away_score is not None:
+            # Convert total scores to goals.behinds approximations
+            home_goals, home_behinds = _convert_total_score_to_goals_behinds(home_score)
+            away_goals, away_behinds = _convert_total_score_to_goals_behinds(away_score)
+            
+            # Set final scores (most important for display)
+            record["team_1_final_goals"] = home_goals
+            record["team_1_final_behinds"] = home_behinds
+            record["team_2_final_goals"] = away_goals
+            record["team_2_final_behinds"] = away_behinds
+            
+            print(f"FIXTUREDOWNLOAD RESULT: {team1} {home_goals}.{home_behinds} ({home_score}) vs {team2} {away_goals}.{away_behinds} ({away_score})")
+        else:
+            print(f"FIXTUREDOWNLOAD: No result for {team1} vs {team2} (Result: '{row.get(FD_RESULT, '')}')")
 
         rows.append(record)
 

@@ -89,6 +89,7 @@ async function loadRound(roundNum) {
     _currentRoundMatches = matches;
     $("round-matches").innerHTML = "";
     matches.forEach((m) => {
+      const lineupHtml = buildRugbyLineupStatusHtml(m);
       const col = document.createElement("div");
       col.className = "col-sm-6 col-xl-4";
       col.innerHTML = `
@@ -102,6 +103,7 @@ async function loadRound(roundNum) {
             <span class="vs-badge">VS</span>
             <span class="team-name text-light" style="flex:1">${m.away_team_display}</span>
           </div>
+          ${lineupHtml}
         </div>`;
       $("round-matches").appendChild(col);
     });
@@ -109,6 +111,40 @@ async function loadRound(roundNum) {
   } catch (e) {
     $("round-matches").innerHTML = `<div class="text-danger">Failed: ${e.message}</div>`;
   }
+}
+
+function buildRugbyLineupStatusHtml(m) {
+  const hCount = m.home_lineup_count || 0;
+  const aCount = m.away_lineup_count || 0;
+  const hKnown = m.home_lineup_known || 0;
+  const aKnown = m.away_lineup_known || 0;
+  const total = hCount + aCount;
+  const known = hKnown + aKnown;
+
+  if (total === 0) {
+    return `<div class="lineup-status lineup-none mt-2">
+      <span class="lineup-dot none"></span>
+      No lineup data available
+    </div>`;
+  }
+
+  const hUn = hCount - hKnown;
+  const aUn = aCount - aKnown;
+  const allMatched = (hUn + aUn) === 0;
+  const dotClass = allMatched ? "fresh" : (known >= total * 0.7 ? "partial" : "stale");
+  const statusClass = allMatched ? "lineup-fresh" : (known >= total * 0.7 ? "lineup-partial" : "lineup-stale");
+
+  let warnParts = [];
+  if (hUn > 0) warnParts.push(`${m.home_team_display}: ${hUn} unrecognised`);
+  if (aUn > 0) warnParts.push(`${m.away_team_display}: ${aUn} unrecognised`);
+  const warnHtml = warnParts.length > 0
+    ? `<br><span class="lineup-warn">${warnParts.join(" &middot; ")}</span>`
+    : "";
+
+  return `<div class="lineup-status ${statusClass} mt-2">
+    <span class="lineup-dot ${dotClass}"></span>
+    <span>Lineups loaded &middot; ${known}/${total} players matched to model${warnHtml}</span>
+  </div>`;
 }
 
 async function predictRound() {
@@ -469,10 +505,18 @@ async function pollTuningLog() {
   } catch (e) { setTimeout(pollTuningLog, 4000); }
 }
 
+function updateTrainYearFromDefault() {
+  const inp = $("train-year-from");
+  if (!inp) return;
+  const comp = getCompetitionId();
+  inp.value = (comp === "nsw-cup" || comp === "qld-cup") ? "2000" : "2020";
+}
+
 function onCompetitionChange() {
   _fixtureInit = false;
   _trainingInit = false;
   updateFixtureTitle();
+  updateTrainYearFromDefault();
   initFixtureTab();
   // Refresh Data & Training tab so it shows competition-specific data/metrics
   loadDataStatus();
@@ -482,6 +526,7 @@ function onCompetitionChange() {
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   $("tab-training").style.display = "none";
+  updateTrainYearFromDefault();
   initFixtureTab();
   $("competition-select")?.addEventListener("change", onCompetitionChange);
   $("round-select").addEventListener("change", (e) => { if (e.target.value) loadRound(e.target.value); });

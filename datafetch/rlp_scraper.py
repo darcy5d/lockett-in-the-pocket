@@ -100,13 +100,25 @@ def _parse_match_result_line(soup_tag, year: int) -> dict | None:
     team_1 = teams[0]
     team_2 = teams[1]
 
-    # Scores: "Team1 30 (scorers) defeated Team2 8 (scorers)" or "Team1 (R) 30 ... defeated Team2 (R) 22 ..."
+    # Scores: two formats on RLP:
+    # 1) With scorers: "Team1 30 (scorers) defeated Team2 8 (scorers)" or "Team1 (R) 30 ... defeated Team2 (R) 22 ..."
+    # 2) Without scorers (older QLD Cup, BRL, etc.): "[Team1] 36 defeated [Team2] 6 at [Venue]"
     m1 = re.search(r"(\d+)\s*\(", text)  # First score before (
     m2 = re.search(r"defeated\s+.*?(\d+)\s*\(", text, re.DOTALL)  # Second score (.*? skips team name incl. "(R)")
-    if not m1 or not m2:
-        return None
-    score_1 = int(m1.group(1))
-    score_2 = int(m2.group(1))
+    if m1 and m2:
+        score_1 = int(m1.group(1))
+        score_2 = int(m2.group(1))
+    else:
+        # Fallback: format "Team1 X defeated Team2 Y at" (no scorer parens; common for QLD Cup, BRL)
+        # Also "[Team1] X defeated [Team2] Y at" when links present in HTML
+        m_def = re.search(r"(\d+)\s+defeated\s+.+?\s+(\d+)\s+at", text)
+        m_drew = re.search(r"(\d+)\s+drew with\s+.+?\s+(\d+)\s+at", text, re.I)
+        if m_def:
+            score_1, score_2 = int(m_def.group(1)), int(m_def.group(2))
+        elif m_drew:
+            score_1, score_2 = int(m_drew.group(1)), int(m_drew.group(2))
+        else:
+            return None
 
     # Scorers in parentheses (first two paren groups after scores)
     t1_scorers = t2_scorers = ""
@@ -207,10 +219,20 @@ def scrape_round(
     lineup_entries = []
 
     # Collect match result divs (exclude huge page wrapper: text < 1200 chars)
+    # Skip parent divs that contain child divs with matches (avoids duplicates)
     blocks = []
     for elem in soup.find_all("div"):
         text = elem.get_text()
         if ("defeated" in text or "drew" in text.lower()) and len(text) < 1200:
+            # Skip if this div contains a child div that also has a match
+            has_child_match = any(
+                ("defeated" in (c.get_text() or "") or "drew" in (c.get_text() or "").lower())
+                and len((c.get_text() or "")) < 1200
+                for c in elem.find_all("div", recursive=True)
+                if c is not elem
+            )
+            if has_child_match:
+                continue
             m = _parse_match_result_line(elem, year)
             if m:
                 blocks.append(("result", elem))

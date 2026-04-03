@@ -17,7 +17,9 @@ import json
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import pandas as pd
 import requests
@@ -92,6 +94,67 @@ def _build_name_to_player_id(cache: dict) -> dict:
                     by_name[vlo_norm] = []
                 by_name[vlo_norm].append((pid, dob))
     return by_name_dob, by_name
+
+
+def _normalize_for_rlp_search(name: str) -> str:
+    """Strip accents (César->Cesar) and apostrophes for RLP search - RLP rejects accented queries."""
+    if not name:
+        return ""
+    s = unicodedata.normalize("NFD", name)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"['\u2019\u2018]", "", s)
+    return s.strip()
+
+
+def _fetch_rlp_by_search(name: str, timeout: int = 15) -> tuple[str | None, str | None, str | None]:
+    """
+    Search RLP by player name. When single match, RLP redirects to player page.
+    Returns (player_id, name, dob) or (None, None, None).
+    Handles apostrophes, accents (César Rougé, Toa Mata'afa) where slug lookup often fails.
+    RLP rejects accented search queries, so we normalize to ASCII first.
+    """
+    if not name or not name.strip():
+        return None, None, None
+    query = _normalize_for_rlp_search(name)
+    if len(query) < 3:
+        return None, None, None
+    url = f"{RLP_BASE}/search?q={quote_plus(query)}"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
+        if r.status_code != 200:
+            return None, None, None
+        final_url = r.url
+        text = r.text
+        # Single result: RLP redirects to /players/{id}/summary.html or /players/{slug}/summary.html
+        id_match = re.search(r"/players/(\d+)/summary\.html", final_url)
+        if id_match:
+            player_id = id_match.group(1)
+            name_match = re.search(r"<title>([^\-]+)\s*\-", text)
+            rlp_name = name_match.group(1).strip() if name_match else name
+            dob_match = re.search(
+                r"Born\s+(?:[A-Za-z]+,\s*)?(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+),\s*(\d{4})",
+                text, re.I
+            )
+            dob = None
+            if dob_match:
+                day, mon_str, year = dob_match.groups()
+                mon = {"jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+                       "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"}.get(mon_str.lower()[:3], "01")
+                dob = f"{int(day):02d}{mon}{year}"
+            return (player_id, rlp_name, dob)
+        # Multiple results: parse search page for first player link
+        if "/search" in final_url:
+            soup = BeautifulSoup(text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                pid_m = re.search(r"/players/(\d+)(?:/|$)", href)
+                if pid_m:
+                    player_id = pid_m.group(1)
+                    rlp_name = a.get_text(strip=True) or name
+                    return (player_id, rlp_name, None)
+        return None, None, None
+    except Exception:
+        return None, None, None
 
 
 def _fetch_rlp_by_slug(slug: str, timeout: int = 15) -> tuple[str | None, str | None, str | None]:
@@ -173,7 +236,18 @@ def _resolve_player_id(
                     return by_name[s][0][0]
     # 3. Try slug -> RLP lookup (discover new players, only when cache miss)
     if slug:
-        pid, rlp_name, dob = _fetch_rlp_by_slug(slug)
+        for try_slug in [slug, _normalize_for_rlp_search(slug.replace("-", " ")).replace(" ", "-")]:
+            if not try_slug or len(try_slug) < 2:
+                continue
+            pid, rlp_name, dob = _fetch_rlp_by_slug(try_slug)
+            if pid:
+                cache[pid] = {"name": rlp_name or name, "dob": dob or ""}
+                _save_cache(cache)
+                return pid
+            time.sleep(rlp_delay)
+    # 4. Fallback: RLP search by name (handles apostrophes, accents, slug mismatches)
+    if name and len(name) >= 3:
+        pid, rlp_name, dob = _fetch_rlp_by_search(name)
         if pid:
             cache[pid] = {"name": rlp_name or name, "dob": dob or ""}
             _save_cache(cache)
@@ -268,7 +342,14 @@ def scrape_lineups(
     cfg = get_competition(competition_id)
     if not cfg:
         raise ValueError(f"Unknown competition: {competition_id}")
-    slug = "nrl" if competition_id == "nrl" else "super-league-uk"
+    _lineup_slugs = {
+        "nrl": "nrl",
+        "uk-super-league": "super-league-uk",
+        "nsw-cup": "nsw-cup",
+        "qld-cup": "qld-cup",
+        "uk-championship": "championship-uk",
+    }
+    slug = _lineup_slugs.get(competition_id, competition_id)
     fixture_path = fixture_path or (DATA_DIR / "matches" / cfg.get("fixture_filename", "matches_2026.csv"))
     output_path = output_path or (DATA_DIR / "lineups" / f"lineup_details_{slug}_{year}_{year}.csv")
 

@@ -558,6 +558,24 @@ QLD: QRL Divisions (North, Central, South East, Far North)
 
 **Source**: [Rugby League Project](https://www.rugbyleagueproject.org/) (RLP). Data is scraped from calendar pages (`/calendar/{year}/comps.html`) and season round summaries (`/seasons/{slug}-{year}/round-{n}/summary.html`).
 
+### Build Pipeline: `rebuild_nrl_from_rlp.py` → `competition_config.py`
+
+The rebuild script scrapes RLP using lineage entries; output filenames use the RLP slug. `competition_config.py` defines which slugs each competition loads. **Slug names must match exactly** between rebuild output and config.
+
+| Competition | Rebuild lineage slugs | Output files | Config slugs (`competition_config.py`) |
+|-------------|------------------------|--------------|---------------------------------------|
+| **nrl** | nswrfl, nswrl, arl, super-league (→super-league-au), nrl | matches_nswrfl_*, matches_nswrl_*, etc. | nswrfl, nswrl, arl, super-league-au, nrl |
+| **nsw-cup** | nswrfl-reserve-grade, nswrl-reserve-grade, nswrl-first-division, nsw-cup | matches_nswrfl-reserve-grade_1908_1983.csv, matches_nswrl-reserve-grade_1984_1997.csv, matches_nswrl-first-division_1998_2007.csv, matches_nsw-cup_2008_2025.csv | nsw-cup, nswrl-first-division, nswrl-reserve-grade, nswrfl-reserve-grade |
+| **qld-cup** | qrl, brl, qld-cup | matches_qrl_*, matches_brl_*, matches_qld-cup_* | qld-cup, brl, qrl |
+
+**NSW Cup full lineage (2nd tier):**
+```
+nswrfl-reserve-grade (1908–1983) → nswrl-reserve-grade (1984–1997)
+  → nswrl-first-division (1998–2007) → nsw-cup (2008–present)
+```
+
+**To expand NSW Cup data:** Run `python datafetch/rebuild_nrl_from_rlp.py --competition nsw-cup` to fetch all four lineage segments from RLP. This yields ~18 seasons of NSW Cup (2008+) plus ~80 years of reserve-grade history.
+
 ### Tier 1 (National Top Tier) — RLP Slug Mapping
 
 | Years | Competition | RLP Slug | Notes |

@@ -36,6 +36,17 @@ TEAM_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "Newcastle": "Newcastle Thunder",
     "Whitehaven": "Whitehaven",
     "Barrow": "Barrow Raiders",
+    # Championship
+    "Oldham": "Oldham RLFC",
+    "Midlands Hurricanes": "Midlands Hurricanes",
+    "Workington Town": "Workington Town",
+    "Doncaster": "Doncaster RLFC",
+    "Hunslet": "Hunslet RLFC",
+    "Keighley": "Keighley Cougars",
+    "Goole Vikings": "Goole Vikings",
+    "Swinton": "Swinton Lions",
+    "Rochdale": "Rochdale Hornets",
+    "North Wales Crusaders": "North Wales Crusaders",
 }
 
 TEAM_EXTERNAL_TO_INTERNAL = {v: k for k, v in TEAM_INTERNAL_TO_DISPLAY.items()}
@@ -45,6 +56,16 @@ for k in TEAM_INTERNAL_TO_DISPLAY:
 # League Unlimited short forms (internal names used as display)
 for internal in TEAM_INTERNAL_TO_DISPLAY:
     TEAM_EXTERNAL_TO_INTERNAL[internal] = internal
+# League Unlimited Championship display names
+TEAM_EXTERNAL_TO_INTERNAL["Salford RLFC"] = "Salford"
+TEAM_EXTERNAL_TO_INTERNAL["Oldham RLFC"] = "Oldham"
+TEAM_EXTERNAL_TO_INTERNAL["Doncaster RLFC"] = "Doncaster"
+TEAM_EXTERNAL_TO_INTERNAL["Hunslet RLFC"] = "Hunslet"
+TEAM_EXTERNAL_TO_INTERNAL["Keighley Cougars"] = "Keighley"
+TEAM_EXTERNAL_TO_INTERNAL["Swinton Lions"] = "Swinton"
+TEAM_EXTERNAL_TO_INTERNAL["Rochdale Hornets"] = "Rochdale"
+TEAM_EXTERNAL_TO_INTERNAL["Whitehaven RLFC"] = "Whitehaven"
+TEAM_EXTERNAL_TO_INTERNAL["Batley Bulldogs"] = "Batley"
 
 VENUE_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "Totally Wicked Stadium": "Totally Wicked Stadium",
@@ -60,6 +81,29 @@ VENUE_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "Belle Vue": "Belle Vue",
     "Leigh Sports Village": "Leigh Sports Village",
     "Plough Lane": "Plough Lane",
+    # Championship
+    "CorpAcq Stadium": "CorpAcq Stadium",
+    "Avery Fields": "Avery Fields",
+    "Northern Competitions Stadium": "Northern Competitions Stadium",
+    "Eco-Power Stadium": "Eco-Power Stadium",
+    "South Leeds Stadium": "South Leeds Stadium",
+    "Cougar Park": "Cougar Park",
+    "The Cherry Red Records Stadium": "The Cherry Red Records Stadium",
+    "The Ortus REC": "The Ortus REC",
+    "Morson Stadium": "Morson Stadium",
+    "Crown Oil Arena": "Crown Oil Arena",
+    "FLAIR Stadium": "FLAIR Stadium",
+    "Steel City Stadium": "Steel City Stadium",
+    "Fox's Biscuits Stadium": "Fox's Biscuits Stadium",
+    "Crow Trees Ground": "Crow Trees Ground",
+    "Derwent Park": "Derwent Park",
+    "DCBL Stadium": "DCBL Stadium",
+    "The Shay Stadium": "The Shay Stadium",
+    "Victoria Pleasure Grounds": "Victoria Pleasure Grounds",
+    "Boundary Park": "Boundary Park",
+    "Bower Fold": "Bower Fold",
+    "Stadiwm Eirias": "Stadiwm Eirias",
+    "Kufflink Stadium": "Kufflink Stadium",
 }
 
 VENUE_EXTERNAL_TO_INTERNAL = {v: k for k, v in VENUE_INTERNAL_TO_DISPLAY.items()}

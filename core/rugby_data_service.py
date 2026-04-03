@@ -150,7 +150,13 @@ class RugbyDataService:
 
     def _get_fixture_slug(self) -> str:
         """Slug for 2026 fixture match_ids (matches lineup scraper)."""
-        return "nrl" if self._competition_id == "nrl" else "super-league-uk"
+        return {
+            "nrl": "nrl",
+            "uk-super-league": "super-league-uk",
+            "nsw-cup": "nsw-cup",
+            "qld-cup": "qld-cup",
+            "uk-championship": "championship-uk",
+        }.get(self._competition_id, self._competition_id)
 
     @functools.lru_cache(maxsize=64)
     def get_last_lineup(self, team_key: str) -> list[dict]:

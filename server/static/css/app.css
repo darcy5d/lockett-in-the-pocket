@@ -99,6 +99,77 @@ body {
   border: 1px solid #3a3a00;
 }
 
+/* ── Lineup status on match cards ───────────────────────────────────────── */
+.lineup-status {
+  font-size: 0.68rem;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid #1a1a2a;
+}
+.lineup-fresh  { color: #5cb85c; }
+.lineup-partial { color: #f0ad4e; }
+.lineup-stale  { color: #666; }
+.lineup-none   { color: #555; font-style: italic; }
+
+.lineup-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.lineup-dot.fresh   { background: #5cb85c; box-shadow: 0 0 4px #5cb85c88; }
+.lineup-dot.partial { background: #f0ad4e; box-shadow: 0 0 4px #f0ad4e88; }
+.lineup-dot.stale   { background: #555; }
+.lineup-dot.none    { background: #333; }
+
+.lineup-warn {
+  color: #f0ad4e;
+  font-size: 0.62rem;
+}
+
+/* ── Completed match styles ────────────────────────────────────────────── */
+.match-card.completed {
+  background: #0a0f1a;
+  border-color: #1e2e3e;
+}
+
+.match-card.completed:hover {
+  border-color: #2e4e5e;
+  box-shadow: 0 4px 20px rgba(76, 175, 80, 0.06);
+}
+
+.score-display {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  font-family: "Consolas", "Monaco", monospace;
+}
+
+.result-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-align: center;
+  min-width: 45px;
+}
+
+.result-badge.completed {
+  background: #1e2e1e;
+  color: #4caf50;
+  border: 1px solid #2e4e2e;
+}
+
+.result-badge.draw {
+  background: #1e1e2e;
+  color: #ff9800;
+  border: 1px solid #3e3e4e;
+}
+
 /* ── Player chips ───────────────────────────────────────────────────────── */
 .player-chip {
   display: inline-flex;

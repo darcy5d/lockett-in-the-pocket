@@ -22,7 +22,12 @@ TEAM_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "Northern": "Northern Pride",
     "Souths Logan": "Souths Logan Magpies",
     "Burleigh": "Burleigh Bears",
-    "Tweed Heads": "Tweed Heads Seagulls",
+    "Tweed Heads": "Tweed Seagulls",
+    "Sunshine Coast": "Sunshine Coast Falcons",
+    "Norths Devils": "Norths Devils",
+    "Western Clydesdales": "Western Clydesdales",
+    "Brisbane Tigers": "Brisbane Tigers",
+    "PNG Hunters": "PNG Hunters",
 }
 
 TEAM_EXTERNAL_TO_INTERNAL = {v: k for k, v in TEAM_INTERNAL_TO_DISPLAY.items()}
@@ -35,6 +40,20 @@ VENUE_INTERNAL_TO_DISPLAY: dict[str, str] = {
     "Queensland Country Bank Stadium": "Queensland Country Bank Stadium",
     "Dolphin Stadium": "Dolphin Stadium",
     "BMD Kougari Oval": "BMD Kougari Oval",
+    "Kayo Stadium": "Kayo Stadium",
+    "Seagulls Sports Complex": "Seagulls Sports Complex",
+    "Bishop Park": "Bishop Park",
+    "Toowoomba Sports Ground": "Toowoomba Sports Ground",
+    "Richardson Park": "Richardson Park",
+    "Santos National Football Stadium": "Santos National Football Stadium",
+    "Totally Workwear Stadium": "Totally Workwear Stadium",
+    "Barlow Park": "Barlow Park",
+    "Davies Park": "Davies Park",
+    "UAA Park": "UAA Park",
+    "Sunshine Coast Stadium": "Sunshine Coast Stadium",
+    "Jack Manski Oval": "Jack Manski Oval",
+    "BB Print Stadium": "BB Print Stadium",
+    "Browne Park": "Browne Park",
 }
 
 VENUE_EXTERNAL_TO_INTERNAL = {v: k for k, v in VENUE_INTERNAL_TO_DISPLAY.items()}

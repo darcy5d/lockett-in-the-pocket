@@ -30,6 +30,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -209,6 +210,44 @@ def api_fixture_refresh():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/fixture/update-scores", methods=["POST"])
+def api_fixture_update_scores():
+    """Update completed match scores from AFL Tables."""
+    try:
+        import sys
+        _PROJECT_ROOT_STR = str(_PROJECT_ROOT)
+        if _PROJECT_ROOT_STR not in sys.path:
+            sys.path.insert(0, _PROJECT_ROOT_STR)
+        
+        # Run AFL Tables scraper for 2026 to get completed match scores
+        script = str(_PROJECT_ROOT / "datafetch/afl_tables_scraper.py")
+        result = subprocess.run(
+            [sys.executable, script, "--year-from", "2026", "--year-to", "2026"],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(_PROJECT_ROOT),
+        )
+        
+        combined = (result.stdout or "") + (result.stderr or "")
+        if result.returncode == 0:
+            _service._invalidate_fixture_cache()  # Clear cache so new scores are loaded
+            # Count how many matches have scores now
+            matches_with_scores = 0
+            try:
+                import pandas as pd
+                df = pd.read_csv(_PROJECT_ROOT / "afl_data/data/matches/matches_2026.csv")
+                matches_with_scores = len(df[(pd.notna(df['team_1_final_goals'])) & (pd.notna(df['team_2_final_goals']))])
+            except:
+                pass
+            return jsonify({"ok": True, "message": f"Scores updated from AFL Tables. {matches_with_scores} matches now have complete scores."})
+        else:
+            snippet = combined[-400:] if combined else "Unknown error"
+            return jsonify({"ok": False, "error": f"AFL Tables scraper failed: {snippet}"}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "AFL Tables scraper timed out after 5 minutes"}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/fixture/rounds")
 def api_fixture_rounds():
     rounds = _service.get_fixture_rounds()
@@ -218,7 +257,42 @@ def api_fixture_rounds():
 @app.route("/api/fixture/<path:round_num>")
 def api_fixture_round(round_num: str):
     matches = _service.get_fixture_round(round_num)
+
+    from datafetch.afl_lineup_scraper import get_lineup_meta
+    meta = get_lineup_meta() or {}
+    meta_round = meta.get("round_num", "")
+    meta_updated = meta.get("afl_last_updated", "")
+    meta_fetched = meta.get("last_fetched", "")
+
+    for m in matches:
+        home_key = m.get("home_team_key", "")
+        away_key = m.get("away_team_key", "")
+        home_lineup = _service.get_last_lineup(home_key)
+        away_lineup = _service.get_last_lineup(away_key)
+        home_known = [p for p in home_lineup if p.get("player_id") != "unknown"]
+        away_known = [p for p in away_lineup if p.get("player_id") != "unknown"]
+
+        home_year = _lineup_year(home_key)
+        away_year = _lineup_year(away_key)
+
+        m["home_lineup_count"] = len(home_lineup)
+        m["away_lineup_count"] = len(away_lineup)
+        m["home_lineup_known"] = len(home_known)
+        m["away_lineup_known"] = len(away_known)
+        m["home_lineup_fresh"] = home_year == 2026
+        m["away_lineup_fresh"] = away_year == 2026
+        m["lineup_meta_round"] = meta_round
+        m["lineup_last_updated"] = meta_updated or meta_fetched
+
     return jsonify(matches)
+
+
+def _lineup_year(team_key: str) -> int:
+    """Return the year of the most recent lineup entry for a team, or 0."""
+    df = _service._get_lineup_df_for_team(team_key)
+    if df.empty or "year" not in df.columns:
+        return 0
+    return int(df["year"].max())
 
 
 @app.route("/api/predict/round", methods=["POST"])
@@ -275,6 +349,99 @@ def api_predict_round():
         results.append(entry)
 
     return jsonify(results)
+
+
+# ---------------------------------------------------------------------------
+# AFL Lineup scraper routes
+# ---------------------------------------------------------------------------
+
+# In-memory store for lineup scrape jobs {job_id: {running, lines, exit_code}}
+_lineup_jobs: dict = {}
+_lineup_lock = threading.Lock()
+
+
+def _run_lineup_scrape(job_id: str, round_num: Optional[str]) -> None:
+    """Run afl_lineup_scraper in a subprocess, streaming output to job store."""
+    script = str(_PROJECT_ROOT / "datafetch/afl_lineup_scraper.py")
+    cmd = [sys.executable, script]
+    if round_num:
+        cmd.extend(["--round", round_num])
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(_PROJECT_ROOT),
+        )
+        for line in proc.stdout:
+            line = line.rstrip()
+            with _lineup_lock:
+                _lineup_jobs[job_id]["lines"].append(line)
+        proc.wait()
+        with _lineup_lock:
+            _lineup_jobs[job_id]["running"] = False
+            _lineup_jobs[job_id]["exit_code"] = proc.returncode
+        if proc.returncode == 0:
+            _service.invalidate_lineup_cache()
+    except Exception as e:
+        with _lineup_lock:
+            _lineup_jobs[job_id]["lines"].append(f"ERROR: {e}")
+            _lineup_jobs[job_id]["running"] = False
+            _lineup_jobs[job_id]["exit_code"] = 1
+
+
+@app.route("/api/afl/lineup/refresh", methods=["POST"])
+def api_afl_lineup_refresh():
+    """Start a background job to scrape AFL.com.au team lineups."""
+    data = request.get_json(silent=True) or {}
+    round_num = data.get("round_num")
+
+    # Only one lineup scrape at a time
+    with _lineup_lock:
+        for job in _lineup_jobs.values():
+            if job.get("running"):
+                return jsonify({"error": "A lineup scrape is already running"}), 409
+
+    job_id = str(uuid.uuid4())[:8]
+    with _lineup_lock:
+        _lineup_jobs[job_id] = {"running": True, "lines": [], "exit_code": None, "seen": 0}
+
+    t = threading.Thread(target=_run_lineup_scrape, args=(job_id, round_num), daemon=True)
+    t.start()
+    return jsonify({"job_id": job_id, "ok": True})
+
+
+@app.route("/api/afl/lineup/refresh/status")
+def api_afl_lineup_refresh_status():
+    """Poll lineup scrape job."""
+    job_id = request.args.get("job_id", "")
+    with _lineup_lock:
+        job = _lineup_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job_id"}), 404
+
+    with _lineup_lock:
+        seen = job["seen"]
+        new_lines = job["lines"][seen:]
+        job["seen"] = len(job["lines"])
+        running = job["running"]
+        exit_code = job["exit_code"]
+
+    return jsonify({
+        "running": running,
+        "new_lines": new_lines,
+        "exit_code": exit_code,
+    })
+
+
+@app.route("/api/afl/lineup/meta")
+def api_afl_lineup_meta():
+    """Return lineup freshness metadata."""
+    from datafetch.afl_lineup_scraper import get_lineup_meta
+    meta = get_lineup_meta()
+    return jsonify(meta or {})
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +732,35 @@ def api_tune_status():
     })
 
 
+@app.route("/api/model/retrain", methods=["POST"])
+def api_model_retrain():
+    """Retrain AFL model with latest data up to current year."""
+    try:
+        current_year = datetime.now().year
+        
+        # Run training script as subprocess
+        result = subprocess.run([
+            sys.executable, 
+            str(_PROJECT_ROOT / "model" / "train.py"),
+            "--year-to", str(current_year),
+            "--epochs", "100"
+        ], 
+        capture_output=True, 
+        text=True, 
+        timeout=1800  # 30 minute timeout
+        )
+        
+        if result.returncode == 0:
+            return jsonify({"ok": True, "message": "Model retrained successfully"})
+        else:
+            return jsonify({"ok": False, "error": result.stderr}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "error": "Training timeout - please use manual method"}), 408
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ---------------------------------------------------------------------------
 # Rugby League API routes (multi-competition)
 # ---------------------------------------------------------------------------
@@ -658,18 +854,24 @@ def api_rugby_fixture_meta(competition_id: str):
         return jsonify({"error": str(e)}), 400
 
 
+_FIXTURE_FETCH_MODULES = {
+    "nrl": "datafetch.fetch_2026_nrl_fixture",
+    "uk-super-league": "datafetch.fetch_2026_super_league_fixture",
+    "nsw-cup": "datafetch.fetch_2026_nsw_cup_fixture",
+    "qld-cup": "datafetch.fetch_2026_qld_cup_fixture",
+    "uk-championship": "datafetch.fetch_2026_championship_fixture",
+}
+
+
 @app.route("/api/rugby/<competition_id>/fixture/refresh", methods=["POST"])
 def api_rugby_fixture_refresh(competition_id: str):
     try:
-        svc = _rugby_service(competition_id)
-        if competition_id == "nrl":
-            from datafetch.fetch_2026_nrl_fixture import fetch_and_save
-            path = fetch_and_save()
-        elif competition_id == "uk-super-league":
-            from datafetch.fetch_2026_super_league_fixture import fetch_and_save
-            path = fetch_and_save()
-        else:
+        mod_name = _FIXTURE_FETCH_MODULES.get(competition_id)
+        if not mod_name:
             return jsonify({"ok": False, "error": f"2026 fixture fetch not yet implemented for {competition_id}"}), 501
+        mod = __import__(mod_name, fromlist=["fetch_and_save"])
+        path = mod.fetch_and_save()
+        svc = _rugby_service(competition_id)
         svc.save_fixture_meta()
         svc._invalidate_fixture_cache()
         return jsonify({"ok": True, "message": f"Fixture refreshed: {path.name}"})
@@ -679,7 +881,10 @@ def api_rugby_fixture_refresh(competition_id: str):
 
 def _competition_to_cache_slug(competition_id: str) -> str:
     """Map API competition_id to build_cache competition slug."""
-    return "super-league-uk" if competition_id == "uk-super-league" else "nrl"
+    return {
+        "uk-super-league": "super-league-uk",
+        "uk-championship": "championship-uk",
+    }.get(competition_id, competition_id)
 
 
 def _run_build_cache(job_id: str, competition_id: str, rebuild: bool = False) -> None:
@@ -709,7 +914,7 @@ def _run_build_cache(job_id: str, competition_id: str, rebuild: bool = False) ->
 @app.route("/api/rugby/<competition_id>/lineup/build-cache", methods=["POST"])
 def api_rugby_lineup_build_cache(competition_id: str):
     """Start build cache job. Returns job_id for polling status."""
-    if competition_id not in ("nrl", "uk-super-league"):
+    if competition_id not in _LINEUP_SUPPORTED:
         return jsonify({"ok": False, "error": f"Cache build not implemented for {competition_id}"}), 501
     data = request.get_json(silent=True) or {}
     rebuild = bool(data.get("rebuild", False))
@@ -737,11 +942,14 @@ def api_rugby_lineup_build_cache_status(competition_id: str):
     })
 
 
+_LINEUP_SUPPORTED = frozenset(("nrl", "uk-super-league", "nsw-cup", "qld-cup", "uk-championship"))
+
+
 @app.route("/api/rugby/<competition_id>/lineup/refresh", methods=["POST"])
 def api_rugby_lineup_refresh(competition_id: str):
     """Scrape League Unlimited Teams pages for fixture matches and update lineup CSV."""
     try:
-        if competition_id not in ("nrl", "uk-super-league"):
+        if competition_id not in _LINEUP_SUPPORTED:
             return jsonify({"ok": False, "error": f"Lineup fetch not implemented for {competition_id}"}), 501
         data = request.get_json(silent=True) or {}
         round_filter = data.get("round_num")
@@ -770,7 +978,22 @@ def api_rugby_fixture_rounds(competition_id: str):
 @app.route("/api/rugby/<competition_id>/fixture/<path:round_num>")
 def api_rugby_fixture_round(competition_id: str, round_num: str):
     try:
-        return jsonify(_rugby_service(competition_id).get_fixture_round(round_num))
+        svc = _rugby_service(competition_id)
+        matches = svc.get_fixture_round(round_num)
+
+        for m in matches:
+            home_key = m.get("home_team_key", "")
+            away_key = m.get("away_team_key", "")
+            home_lineup = svc.get_last_lineup(home_key)
+            away_lineup = svc.get_last_lineup(away_key)
+            home_known = [p for p in home_lineup if p.get("player_id") != "unknown"]
+            away_known = [p for p in away_lineup if p.get("player_id") != "unknown"]
+            m["home_lineup_count"] = len(home_lineup)
+            m["away_lineup_count"] = len(away_lineup)
+            m["home_lineup_known"] = len(home_known)
+            m["away_lineup_known"] = len(away_known)
+
+        return jsonify(matches)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 

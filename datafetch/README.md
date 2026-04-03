@@ -2,6 +2,12 @@
 
 This directory contains scripts for fetching and loading AFL (Australian Football League) data from the [akareen/AFL-Data-Analysis](https://github.com/akareen/AFL-Data-Analysis) repository.
 
+## Rugby League (NRL) Data
+
+- **`rebuild_nrl_from_rlp.py`**: Scrapes [Rugby League Project](https://www.rugbyleagueproject.org/) for match and lineup data. Supports NRL, NSW Cup, QLD Cup, UK Super League, UK Championship.
+- **NSW Cup full lineage**: Run `python datafetch/rebuild_nrl_from_rlp.py --competition nsw-cup` to fetch reserve grade (1908–1983), NSWRL reserve (1984–1997), first division (1998–2007), and NSW Cup (2008–2025). See `nrl_competition_history.md` for lineage details.
+- **Output**: `nrl_data/data/matches/matches_{slug}_{year_from}_{year_to}.csv` and `nrl_data/data/lineups/lineup_details_{slug}_*.csv`
+
 ## Files
 
 - `fetch_afl_data.py`: Script to download the latest AFL data

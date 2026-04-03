@@ -16,6 +16,8 @@ from typing import Optional
 
 import pandas as pd
 
+import pandas as pd
+
 from core.mappings import PlayerMapper, TeamNameMapper, VenueMapper
 
 # Placeholder time used by fixturedownload.com for unconfirmed timeslots (UTC)
@@ -146,6 +148,12 @@ class DataService:
             return pd.DataFrame()
         return pd.read_csv(path)
 
+    def invalidate_lineup_cache(self) -> None:
+        """Clear cached lineup data so fresh files are read on next access."""
+        self.get_last_lineup.cache_clear()
+        self.get_season_players.cache_clear()
+        self._lineup_df = None
+
     @functools.lru_cache(maxsize=64)
     def get_last_lineup(self, team_key: str) -> list[dict]:
         """
@@ -273,7 +281,10 @@ class DataService:
         Each match dict:
             round_num, date, time_confirmed, venue, venue_display,
             home_team_key, home_team_display,
-            away_team_key, away_team_display
+            away_team_key, away_team_display,
+            team_1_final_goals, team_1_final_behinds,
+            team_2_final_goals, team_2_final_behinds,
+            completed (boolean indicating if match has scores)
         """
         df = self._load_fixture()
         if df.empty:
@@ -291,6 +302,26 @@ class DataService:
             home_key = home_display.lower().replace(" ", "_")
             away_key = away_display.lower().replace(" ", "_")
 
+            # Extract score data if available
+            team_1_goals = row.get("team_1_final_goals")
+            team_1_behinds = row.get("team_1_final_behinds")
+            team_2_goals = row.get("team_2_final_goals")
+            team_2_behinds = row.get("team_2_final_behinds")
+            
+            # Check if match is completed (has valid scores)
+            completed = False
+            if (pd.notna(team_1_goals) and pd.notna(team_1_behinds) and 
+                pd.notna(team_2_goals) and pd.notna(team_2_behinds)):
+                try:
+                    # Ensure scores are valid numbers
+                    float(team_1_goals)
+                    float(team_1_behinds) 
+                    float(team_2_goals)
+                    float(team_2_behinds)
+                    completed = True
+                except (ValueError, TypeError):
+                    pass
+
             matches.append({
                 "round_num": round_num,
                 "date": date_str,
@@ -301,6 +332,11 @@ class DataService:
                 "home_team_display": home_display,
                 "away_team_key": away_key,
                 "away_team_display": away_display,
+                "team_1_final_goals": team_1_goals if completed else None,
+                "team_1_final_behinds": team_1_behinds if completed else None,
+                "team_2_final_goals": team_2_goals if completed else None,
+                "team_2_final_behinds": team_2_behinds if completed else None,
+                "completed": completed,
             })
         return matches
 

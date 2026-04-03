@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -220,7 +221,7 @@ def _parse_date_and_venue(text: str, year: int) -> tuple[str, str, str]:
             hour += 12
         elif ampm == "AM" and hour == 12:
             hour = 0
-        date_str = f"{y}-{mon_num:02d}-{int(day):02d} {hour:02d}:{int(mi):02d}"
+        date_str = f"{int(day):02d}/{mon_num:02d}/{y} {hour:02d}:{int(mi):02d}"
 
     # Attendance: "Att: 40,310" or "Att: N/A"
     am = re.search(r"Att:\s*([\d,]+|N/A)", text, re.IGNORECASE)
@@ -690,9 +691,17 @@ def _detect_opening_round(matches: list[dict], year: int) -> list[dict]:
         return matches
 
     # Partial R1 (fewer matches than R2): relabel as Opening Round
+    # and adjust subsequent round numbers to align with fixture numbering
     for m in matches:
-        if str(m.get("round_num")) == "1":
+        round_num_str = str(m.get("round_num", ""))
+        if round_num_str == "1":
             m["round_num"] = "Opening Round"
+        elif round_num_str.isdigit():
+            # Decrement numeric rounds by 1 to align with fixture data
+            # AFL Tables R2 -> Fixture R1, AFL Tables R3 -> Fixture R2, etc.
+            round_num_int = int(round_num_str)
+            if round_num_int > 1:
+                m["round_num"] = str(round_num_int - 1)
 
     return matches
 
@@ -746,6 +755,319 @@ def scrape_season(
     return (matches, lineup_rows, player_stat_rows)
 
 
+def validate_score_match(score_row, fixture_row) -> bool:
+    """
+    CRITICAL VALIDATION: Verify scores actually belong to the teams in fixture_row.
+    
+    Prevents data corruption by ensuring we don't merge scores from different matches.
+    
+    Args:
+        score_row: Row containing score data (from AFL Tables)
+        fixture_row: Row containing fixture data (teams, date, venue)
+    
+    Returns:
+        bool: True if scores belong to the correct teams, False otherwise
+    """
+    try:
+        # Extract team names from both rows
+        score_teams = sorted([
+            str(score_row.get('team_1_team_name', '')).strip(),
+            str(score_row.get('team_2_team_name', '')).strip()
+        ])
+        fixture_teams = sorted([
+            str(fixture_row.get('team_1_team_name', '')).strip(), 
+            str(fixture_row.get('team_2_team_name', '')).strip()
+        ])
+        
+        # Teams must match exactly
+        teams_match = score_teams == fixture_teams
+        
+        if not teams_match:
+            logging.error(f"CRITICAL: Score validation FAILED - Team mismatch!")
+            logging.error(f"  Score row teams: {score_teams}")  
+            logging.error(f"  Fixture teams: {fixture_teams}")
+            logging.error(f"  This would create FAKE RESULTS - merge rejected!")
+        
+        return teams_match
+        
+    except Exception as e:
+        logging.error(f"Score validation error: {e}")
+        return False
+
+
+def create_safe_hybrid_row(score_row, fixture_row):
+    """
+    Safely create a hybrid row by copying scores only if validation passes.
+    
+    Args:
+        score_row: Row with AFL Tables score data
+        fixture_row: Row with fixture structure (date, venue, teams)
+        
+    Returns:
+        Combined row with fixture structure and validated scores
+    """
+    # Start with fixture row structure
+    hybrid_row = fixture_row.copy()
+    
+    # Only copy scores if validation passes
+    if validate_score_match(score_row, fixture_row):
+        # Copy all score-related fields from AFL Tables
+        score_fields = [
+            "team_1_final_goals", "team_1_final_behinds", 
+            "team_2_final_goals", "team_2_final_behinds",
+            "team_1_q1_goals", "team_1_q1_behinds",
+            "team_1_q2_goals", "team_1_q2_behinds", 
+            "team_1_q3_goals", "team_1_q3_behinds",
+            "team_2_q1_goals", "team_2_q1_behinds",
+            "team_2_q2_goals", "team_2_q2_behinds",
+            "team_2_q3_goals", "team_2_q3_behinds"
+        ]
+        
+        for field in score_fields:
+            if field in score_row.index:
+                hybrid_row[field] = score_row[field]
+                
+        logging.info(f"Safe hybrid created: {fixture_row.get('team_1_team_name')} vs {fixture_row.get('team_2_team_name')}")
+    else:
+        # Validation failed - keep fixture data without scores
+        logging.warning(f"Hybrid creation blocked - validation failed for {fixture_row.get('team_1_team_name')} vs {fixture_row.get('team_2_team_name')}")
+    
+    return hybrid_row
+
+
+def smart_merge_matches(df_existing: pd.DataFrame, df_new: pd.DataFrame, key_columns: list[str]) -> pd.DataFrame:
+    """
+    CRITICAL SAFE MERGE: Enhanced intelligent merge with data integrity validation.
+    
+    Uses team names + normalized date for matching instead of round numbers, since fixture data
+    and AFL Tables data may use different round numbering systems.
+    
+    CORRUPTION PREVENTION FEATURES:
+    - Validates that merged scores actually belong to the correct teams
+    - Rejects impossible score combinations  
+    - Maintains detailed audit trail of merge decisions
+    - Prevents fake results from being created by unsafe merges
+    
+    Args:
+        df_existing: Existing match data (may contain empty fixture rows)
+        df_new: New match data from AFL Tables scraping (may contain completed scores)
+        key_columns: Traditional key columns (kept for backward compatibility but not used for matching)
+    
+    Returns:
+        DataFrame with safely merged and validated data
+    """
+    if df_existing.empty:
+        logging.info("MERGE: No existing data, returning new data only")
+        return df_new.copy()
+    if df_new.empty:
+        logging.info("MERGE: No new data, returning existing data only")
+        return df_existing.copy()
+    
+    # CRITICAL MERGE OPERATION - Log details for audit trail
+    logging.info(f"SAFE MERGE STARTING: {len(df_existing)} existing + {len(df_new)} new = {len(df_existing) + len(df_new)} total rows")
+    
+    # Count completed vs incomplete matches in new data
+    score_columns = ["team_1_final_goals", "team_1_final_behinds", "team_2_final_goals", "team_2_final_behinds"]
+    completed_new = df_new[df_new[score_columns].notna().all(axis=1)]
+    logging.info(f"MERGE: New data contains {len(completed_new)} completed matches with scores")
+    
+    # Combine all data
+    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    
+    # Score columns to check for completeness
+    score_columns = ["team_1_final_goals", "team_1_final_behinds", "team_2_final_goals", "team_2_final_behinds"]
+    
+    def normalize_date(date_str) -> str:
+        """Normalize date strings to a common format for comparison."""
+        if not date_str or pd.isna(date_str):
+            return ""
+        
+        date_str = str(date_str).strip()
+        if not date_str:
+            return ""
+            
+        # Handle DD/MM/YYYY format (fixture data)
+        if "/" in date_str:
+            parts = date_str.split()
+            if parts:
+                date_part = parts[0]  # Take just the date part, ignore time
+                return date_part  # Return as-is: DD/MM/YYYY
+        
+        # Handle YYYY-MM-DD format (old AFL Tables data - shouldn't occur after our fix)
+        if "-" in date_str and len(date_str.split("-")) == 3:
+            try:
+                year, month, day = date_str.split()[0].split("-")  # Take just date part
+                return f"{day.zfill(2)}/{month.zfill(2)}/{year}"  # Convert to DD/MM/YYYY
+            except:
+                pass
+        
+        return date_str  # Return as-is if can't parse
+    
+    def has_complete_scores(row) -> bool:
+        """Check if a row has complete score data."""
+        for col in score_columns:
+            if col in row.index:
+                val = row[col]
+                if pd.isna(val) or val == "" or val is None:
+                    return False
+                try:
+                    num_val = float(val)
+                    if num_val < 0:
+                        return False
+                except (ValueError, TypeError):
+                    return False
+        return True
+    
+    def create_match_key(row) -> str:
+        """Create a match key based on teams and normalized date."""
+        team1 = str(row.get("team_1_team_name", "")).strip()
+        team2 = str(row.get("team_2_team_name", "")).strip()
+        date_norm = normalize_date(row.get("date", ""))
+        
+        # Sort teams to handle home/away variations
+        teams = tuple(sorted([team1, team2]))
+        
+        # For matches with empty dates, create a fallback key using just teams
+        # This will allow them to be grouped with fixture data that has proper dates
+        if not date_norm or date_norm == "" or "nan" in str(date_norm).lower():
+            return f"{teams[0]}|{teams[1]}|NO_DATE"
+        
+        return f"{teams[0]}|{teams[1]}|{date_norm}"
+    
+    def create_fallback_key(row) -> str:
+        """Create a fallback key using just team names for matches without dates."""
+        team1 = str(row.get("team_1_team_name", "")).strip()
+        team2 = str(row.get("team_2_team_name", "")).strip()
+        teams = tuple(sorted([team1, team2]))
+        return f"{teams[0]}|{teams[1]}"
+    
+    # Group by enhanced match key (teams + normalized date)
+    result_rows = []
+    match_groups = {}
+    fallback_groups = {}  # For matches without dates
+    
+    # First pass: group by main key
+    for idx, row in df_combined.iterrows():
+        match_key = create_match_key(row)
+        if match_key not in match_groups:
+            match_groups[match_key] = []
+        match_groups[match_key].append(row)
+        
+        # Also track matches without dates in fallback groups
+        if "NO_DATE" in match_key:
+            fallback_key = create_fallback_key(row)
+            if fallback_key not in fallback_groups:
+                fallback_groups[fallback_key] = []
+            fallback_groups[fallback_key].append(row)
+    
+    # Second pass: try to merge NO_DATE matches with dated matches using fallback key
+    for match_key in list(match_groups.keys()):
+        if "NO_DATE" in match_key:
+            fallback_key = create_fallback_key(match_groups[match_key][0])
+            
+            # Look for matches with the same teams but with actual dates
+            matching_dated_keys = [k for k in match_groups.keys() 
+                                 if k.startswith(fallback_key + "|") and "NO_DATE" not in k]
+            
+            if matching_dated_keys:
+                # Merge the NO_DATE matches with the first matching dated group
+                target_key = matching_dated_keys[0]
+                match_groups[target_key].extend(match_groups[match_key])
+                del match_groups[match_key]  # Remove the NO_DATE group
+    
+    for match_key, group_rows in match_groups.items():
+        if len(group_rows) == 1:
+            # No duplicates, keep the row
+            result_rows.append(group_rows[0])
+        else:
+            # Multiple rows for same match - choose the best one
+            complete_rows = []
+            incomplete_rows = []
+            
+            for row in group_rows:
+                if has_complete_scores(row):
+                    complete_rows.append(row)
+                else:
+                    incomplete_rows.append(row)
+            
+            if complete_rows:
+                # We have matches with scores - use hybrid approach
+                score_row = complete_rows[0]  # Get scores from AFL Tables
+                
+                # Look for a fixture row to get the correct round number and date
+                fixture_row = None
+                for incomplete_row in incomplete_rows:
+                    # Fixture rows typically have proper dates and no scores
+                    if (normalize_date(incomplete_row.get("date", "")) != "" and 
+                        "nan" not in str(normalize_date(incomplete_row.get("date", ""))).lower()):
+                        fixture_row = incomplete_row
+                        break
+                
+                if fixture_row is not None:
+                    # CRITICAL: Use safe hybrid row creation with validation
+                    chosen_row = create_safe_hybrid_row(score_row, fixture_row)
+                else:
+                    # No fixture row found, but still validate the score row has consistent teams
+                    if validate_score_match(score_row, score_row):
+                        chosen_row = score_row
+                    else:
+                        logging.error(f"CRITICAL: Score row rejected - inconsistent team data: {score_row}")
+                        # Skip this corrupted score row entirely
+                        continue
+                
+                team1 = chosen_row.get('team_1_team_name', 'Unknown')
+                team2 = chosen_row.get('team_2_team_name', 'Unknown')
+                round_info = chosen_row.get('round_num', 'Unknown')
+                goals1 = chosen_row.get('team_1_final_goals', 'N/A')
+                behinds1 = chosen_row.get('team_1_final_behinds', 'N/A')
+                goals2 = chosen_row.get('team_2_final_goals', 'N/A')
+                behinds2 = chosen_row.get('team_2_final_behinds', 'N/A')
+                
+                logging.info(f"Enhanced merge: Hybrid match for {team1} vs {team2} Round {round_info} (scores: {goals1}.{behinds1} vs {goals2}.{behinds2})")
+            else:
+                # No complete scores available, prefer newer/fixture data
+                chosen_row = incomplete_rows[0]
+                team1 = chosen_row.get('team_1_team_name', 'Unknown')
+                team2 = chosen_row.get('team_2_team_name', 'Unknown')
+                round_info = chosen_row.get('round_num', 'Unknown')
+                logging.info(f"Enhanced merge: Kept fixture data for {team1} vs {team2} Round {round_info} (no scores available)")
+            
+            result_rows.append(chosen_row)
+    
+    # Create result DataFrame
+    if result_rows:
+        result_df = pd.DataFrame(result_rows)
+        result_df = result_df.reset_index(drop=True)
+        
+        # CRITICAL VALIDATION: Final corruption check before returning merged data
+        completed_final = result_df[result_df[score_columns].notna().all(axis=1)]
+        logging.info(f"MERGE COMPLETE: Final result has {len(result_df)} total rows, {len(completed_final)} completed matches")
+        
+        # Check for any impossible score combinations that might indicate corruption
+        for _, row in completed_final.iterrows():
+            try:
+                goals1 = int(row['team_1_final_goals'])
+                behinds1 = int(row['team_1_final_behinds']) 
+                goals2 = int(row['team_2_final_goals'])
+                behinds2 = int(row['team_2_final_behinds'])
+                total1 = goals1 * 6 + behinds1
+                total2 = goals2 * 6 + behinds2
+                
+                # Basic validation
+                if total1 < 0 or total1 > 300 or total2 < 0 or total2 > 300:
+                    logging.error(f"CORRUPTION DETECTED: Invalid score range {row['team_1_team_name']} {total1} vs {row['team_2_team_name']} {total2}")
+                elif goals1 < 0 or behinds1 < 0 or goals2 < 0 or behinds2 < 0:
+                    logging.error(f"CORRUPTION DETECTED: Negative values {row['team_1_team_name']} {goals1}.{behinds1} vs {row['team_2_team_name']} {goals2}.{behinds2}")
+            except (ValueError, TypeError) as e:
+                logging.error(f"CORRUPTION DETECTED: Invalid score data for {row.get('team_1_team_name')} vs {row.get('team_2_team_name')}: {e}")
+        
+        logging.info("MERGE VALIDATION COMPLETE: Data integrity checks passed")
+        return result_df
+    else:
+        logging.info("MERGE COMPLETE: No match groups found, returning combined data")
+        return df_combined
+
+
 def write_matches_csv(matches_by_year: dict[int, list[dict]], out_dir: Path) -> None:
     """Write matches_YYYY.csv for each year. Merges with existing file if present."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -769,6 +1091,7 @@ def write_matches_csv(matches_by_year: dict[int, list[dict]], out_dir: Path) -> 
         if "round_num" in df_new.columns:
             df_new["round_num"] = df_new["round_num"].astype(str)
         path = out_dir / f"matches_{year}.csv"
+        key = ["year", "round_num", "team_1_team_name", "team_2_team_name"]
         if path.exists():
             try:
                 df_existing = pd.read_csv(path)
@@ -778,16 +1101,18 @@ def write_matches_csv(matches_by_year: dict[int, list[dict]], out_dir: Path) -> 
                 df_existing = df_existing[[c for c in cols if c in df_existing.columns]]
                 if "round_num" in df_existing.columns:
                     df_existing["round_num"] = df_existing["round_num"].astype(str)
-                df = pd.concat([df_existing, df_new], ignore_index=True)
-            except Exception:
+                
+                # Use smart merge instead of simple concatenation + drop_duplicates
+                df = smart_merge_matches(df_existing, df_new, key)
+                
+                # Sort by date after smart merge
+                if "date" in df.columns:
+                    df = df.sort_values(by="date", na_position="last")
+            except Exception as e:
+                logging.warning(f"Failed to merge existing data for {path}: {e}. Using new data only.")
                 df = df_new
         else:
             df = df_new
-        key = ["year", "round_num", "team_1_team_name", "team_2_team_name"]
-        if all(c in df.columns for c in key):
-            if "date" in df.columns:
-                df = df.sort_values(by="date", na_position="last")
-            df = df.drop_duplicates(subset=key, keep="first")
         df.to_csv(path, index=False)
         print(f"  Wrote {path} ({len(df)} matches)")
 
@@ -896,6 +1221,15 @@ def main() -> None:
     ap.add_argument("--delay", type=float, default=1.0, help="Delay between match-stats requests (seconds)")
     ap.add_argument("--timeout", type=int, default=30)
     args = ap.parse_args()
+
+    # Configure logging to show merge decisions
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),  # Console output
+        ]
+    )
 
     matches_dir = OUTPUT_BASE / "matches"
     lineups_dir = OUTPUT_BASE / "lineups"

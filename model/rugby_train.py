@@ -279,8 +279,11 @@ def train(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--competition", type=str, default="nrl")
-    ap.add_argument("--year-from", type=int, default=2020)
+    ap.add_argument("--year-from", type=int, default=None, help="Default: 2000 for nsw-cup/qld-cup, 2020 for nrl")
     ap.add_argument("--year-to", type=int, default=2025)
     ap.add_argument("--epochs", type=int, default=30)
     args = ap.parse_args()
-    train(args.competition, args.year_from, args.year_to, args.epochs)
+    year_from = args.year_from
+    if year_from is None:
+        year_from = 2000 if args.competition in ("nsw-cup", "qld-cup") else 2020
+    train(args.competition, year_from, args.year_to, args.epochs)
